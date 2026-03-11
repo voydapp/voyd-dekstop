@@ -1,17 +1,23 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.0",
-  "description": "",
+  "version": "1.0.1",
+  "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "publish": "electron-builder --publish always"
   },
   "build": {
     "appId": "com.voyd.desktop",
     "productName": "VOYD",
     "directories": {
       "output": "dist"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "voydapp",
+      "repo": "voyd-dekstop"
     },
     "win": {
       "target": "nsis",
@@ -27,11 +33,13 @@
     }
   },
   "keywords": [],
-  "author": "",
+  "author": "voydapp",
   "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
     "electron": "^40.8.0",
     "electron-builder": "^26.8.1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   }
 }
