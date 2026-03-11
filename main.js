@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, dialog } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 
@@ -8,6 +8,12 @@ let mainWindow = null
 // Auto updater config
 autoUpdater.autoDownload = true
 autoUpdater.autoInstallOnAppQuit = true
+autoUpdater.setFeedURL({
+  provider: 'github',
+  owner: 'voydapp',
+  repo: 'voyd-dekstop',
+  private: false
+})
 
 autoUpdater.on('update-available', () => {
   mainWindow?.webContents.executeJavaScript(`
@@ -31,7 +37,7 @@ ipcMain.on('window-maximize', () => {
 })
 
 ipcMain.on('window-close', () => {
-  mainWindow?.hide() // hide to tray instead of closing
+  mainWindow?.hide()
 })
 
 ipcMain.on('install-update', () => {
@@ -68,7 +74,6 @@ function createTray() {
   tray.setToolTip('VOYD')
   tray.setContextMenu(contextMenu)
 
-  // Double click tray icon to show app
   tray.on('double-click', () => {
     mainWindow?.show()
     mainWindow?.focus()
@@ -106,7 +111,6 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false)
 
-  // Intercept close to hide to tray instead
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {
       e.preventDefault()
@@ -120,7 +124,6 @@ function createWindow() {
   })
 
   mainWindow.webContents.on('did-finish-load', () => {
-    // Inject version info
     mainWindow.webContents.executeJavaScript(`
       window.__VOYD_VERSION__ = '${app.getVersion()}';
     `)
@@ -226,7 +229,9 @@ function createWindow() {
 
   // Check for updates after load
   mainWindow.webContents.once('did-finish-load', () => {
-    autoUpdater.checkForUpdatesAndNotify()
+    setTimeout(() => {
+      autoUpdater.checkForUpdatesAndNotify()
+    }, 5000)
   })
 }
 
@@ -245,6 +250,6 @@ app.on('will-quit', () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    // Don't quit — stay in tray
+    // Stay in tray
   }
 })

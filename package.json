@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.1",
+  "version": "1.0.10",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
@@ -17,7 +17,8 @@
     "publish": {
       "provider": "github",
       "owner": "voydapp",
-      "repo": "voyd-dekstop"
+      "repo": "voyd-dekstop",
+      "releaseType": "release"
     },
     "win": {
       "target": "nsis",
