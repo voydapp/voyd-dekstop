@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(cd \"/c/Users/matt/OneDrive/Desktop/Voyd desktop/voyd-desktop\" && npm start)",
-      "Bash(cd \"/c/Users/matt/OneDrive/Desktop/Voyd desktop/voyd-desktop\" && npx electron .)"
+      "Bash(cd \"/c/Users/matt/OneDrive/Desktop/Voyd desktop/voyd-desktop\" && npx electron .)",
+      "WebFetch(domain:joinvoyd.com)"
     ]
   }
 }

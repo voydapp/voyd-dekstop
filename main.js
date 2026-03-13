@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, dialog } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, dialog, session } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 
@@ -130,6 +130,44 @@ function createWindow() {
 
   mainWindow.loadURL('https://joinvoyd.com/app')
 
+  // FIX 6: Enforce a fallback CSP if the server doesn't provide one
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = details.responseHeaders || {}
+    const hasCSP = Object.keys(headers).some(k => k.toLowerCase() === 'content-security-policy')
+    if (!hasCSP) {
+      callback({
+        responseHeaders: {
+          ...headers,
+          'Content-Security-Policy': [
+            "default-src 'self' https://joinvoyd.com https://*.joinvoyd.com; " +
+            "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval'; " +
+            "style-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline'; " +
+            "img-src * data: blob:; " +
+            "media-src * data: blob:; " +
+            "connect-src *; " +
+            "font-src * data:; " +
+            "frame-src 'self' https://joinvoyd.com https://*.joinvoyd.com;"
+          ]
+        }
+      })
+    } else {
+      callback({ responseHeaders: headers })
+    }
+  })
+
+  // FIX 10: Restrict permissions to only what VOYD needs
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    const allowedPermissions = ['media', 'notifications']
+    callback(allowedPermissions.includes(permission))
+  })
+
+  // FIX 11: Disable DevTools in production builds
+  if (app.isPackaged) {
+    mainWindow.webContents.on('devtools-opened', () => {
+      mainWindow.webContents.closeDevTools()
+    })
+  }
+
   // FIX 2: Proper URL validation using URL parsing instead of startsWith
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     try {
@@ -173,6 +211,7 @@ function createWindow() {
   })
 
   // FIX 4: Keybinds via IPC instead of executeJavaScript
+  // Global shortcuts for mute/deafen (need to work when window is unfocused)
   globalShortcut.register('CommandOrControl+Shift+M', () => {
     mainWindow?.webContents.send('keybind', 'toggle_mute')
   })
@@ -181,29 +220,35 @@ function createWindow() {
     mainWindow?.webContents.send('keybind', 'toggle_deafen')
   })
 
-  globalShortcut.register('CommandOrControl+K', () => {
-    mainWindow?.webContents.send('keybind', 'quick_switcher')
-  })
+  // FIX 7: Local shortcuts for app-specific actions (only active when window is focused)
+  const localShortcuts = [
+    { key: 'CommandOrControl+K', action: 'quick_switcher' },
+    { key: 'CommandOrControl+,', action: 'open_settings' },
+    { key: 'Alt+Up', action: 'navigate_up' },
+    { key: 'Alt+Down', action: 'navigate_down' },
+    { key: 'Alt+Shift+Up', action: 'navigate_unread_up' },
+    { key: 'Alt+Shift+Down', action: 'navigate_unread_down' },
+  ]
 
-  globalShortcut.register('CommandOrControl+,', () => {
-    mainWindow?.webContents.send('keybind', 'open_settings')
-  })
+  const registerLocalShortcuts = () => {
+    localShortcuts.forEach(({ key, action }) => {
+      globalShortcut.register(key, () => {
+        mainWindow?.webContents.send('keybind', action)
+      })
+    })
+  }
 
-  globalShortcut.register('Alt+Up', () => {
-    mainWindow?.webContents.send('keybind', 'navigate_up')
-  })
+  const unregisterLocalShortcuts = () => {
+    localShortcuts.forEach(({ key }) => {
+      globalShortcut.unregister(key)
+    })
+  }
 
-  globalShortcut.register('Alt+Down', () => {
-    mainWindow?.webContents.send('keybind', 'navigate_down')
-  })
+  mainWindow.on('focus', registerLocalShortcuts)
+  mainWindow.on('blur', unregisterLocalShortcuts)
 
-  globalShortcut.register('Alt+Shift+Up', () => {
-    mainWindow?.webContents.send('keybind', 'navigate_unread_up')
-  })
-
-  globalShortcut.register('Alt+Shift+Down', () => {
-    mainWindow?.webContents.send('keybind', 'navigate_unread_down')
-  })
+  // Register immediately if window is already focused
+  if (mainWindow.isFocused()) registerLocalShortcuts()
 
   // Check for updates after load
   mainWindow.webContents.once('did-finish-load', () => {
