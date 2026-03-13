@@ -30,15 +30,11 @@ autoUpdater.setFeedURL({
 })
 
 autoUpdater.on('update-available', () => {
-  mainWindow?.webContents.executeJavaScript(`
-    window.dispatchEvent(new CustomEvent('voyd-update', { detail: { status: 'available' } }))
-  `)
+  mainWindow?.webContents.send('update-status', 'available')
 })
 
 autoUpdater.on('update-downloaded', () => {
-  mainWindow?.webContents.executeJavaScript(`
-    window.dispatchEvent(new CustomEvent('voyd-update', { detail: { status: 'ready' } }))
-  `)
+  mainWindow?.webContents.send('update-status', 'ready')
 })
 
 // IPC window controls
@@ -54,9 +50,28 @@ ipcMain.on('window-close', () => {
   mainWindow?.hide()
 })
 
-ipcMain.on('install-update', () => {
-  autoUpdater.quitAndInstall()
+// FIX 3: Validate sender origin and add confirmation before installing updates
+ipcMain.on('install-update', (event) => {
+  const senderUrl = event.senderFrame?.url || ''
+  try {
+    const parsed = new URL(senderUrl)
+    if (parsed.origin !== 'https://joinvoyd.com') return
+  } catch {
+    return
+  }
+
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Update Ready',
+    message: 'A new version is ready. Restart now to apply the update?',
+    buttons: ['Restart', 'Later']
+  }).then(({ response }) => {
+    if (response === 0) autoUpdater.quitAndInstall()
+  })
 })
+
+// FIX 4: Version via IPC instead of executeJavaScript
+ipcMain.handle('get-version', () => app.getVersion())
 
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png')).resize({ width: 16, height: 16 })
@@ -115,12 +130,32 @@ function createWindow() {
 
   mainWindow.loadURL('https://joinvoyd.com/app')
 
+  // FIX 2: Proper URL validation using URL parsing instead of startsWith
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith('https://joinvoyd.com')) {
-      shell.openExternal(url)
-      return { action: 'deny' }
+    try {
+      const parsed = new URL(url)
+      if (parsed.origin === 'https://joinvoyd.com') {
+        return { action: 'allow' }
+      }
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        shell.openExternal(url)
+      }
+    } catch {
+      // Invalid URL, deny silently
     }
-    return { action: 'allow' }
+    return { action: 'deny' }
+  })
+
+  // FIX 1: Restrict navigation to joinvoyd.com origin only
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      const parsed = new URL(url)
+      if (parsed.origin !== 'https://joinvoyd.com') {
+        event.preventDefault()
+      }
+    } catch {
+      event.preventDefault()
+    }
   })
 
   mainWindow.setMenuBarVisibility(false)
@@ -137,114 +172,37 @@ function createWindow() {
     }
   })
 
-  mainWindow.webContents.on('did-finish-load', () => {
-    mainWindow.webContents.executeJavaScript(`
-      window.__VOYD_VERSION__ = '${app.getVersion()}';
-    `)
-
-    // Inject titlebar only on login/auth pages (not in app)
-    mainWindow.webContents.executeJavaScript(`
-      const isAppPage = window.location.pathname.startsWith('/app');
-      if (!isAppPage) {
-        const style = document.createElement('style');
-        style.innerHTML = \`
-          #voyd-titlebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 32px;
-            background: transparent;
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            -webkit-app-region: drag;
-            z-index: 999999;
-          }
-          #voyd-titlebar button {
-            -webkit-app-region: no-drag;
-            border: none;
-            background: transparent;
-            color: rgba(255,255,255,0.5);
-            width: 32px;
-            height: 22px;
-            font-size: 13px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 4px;
-            margin-right: 2px;
-          }
-          #voyd-titlebar button:hover { background: rgba(255,255,255,0.1); color: white; }
-          #voyd-titlebar #voyd-close:hover { background: #e81123; color: white; }
-        \`;
-        document.head.appendChild(style);
-
-        if (!document.getElementById('voyd-titlebar')) {
-          const bar = document.createElement('div');
-          bar.id = 'voyd-titlebar';
-          bar.innerHTML = \`
-            <button id="voyd-min" title="Minimize">&#8211;</button>
-            <button id="voyd-max" title="Maximize">&#9633;</button>
-            <button id="voyd-close" title="Close">&#10005;</button>
-          \`;
-          document.body.prepend(bar);
-          document.getElementById('voyd-min').addEventListener('click', () => window.electronAPI?.minimize());
-          document.getElementById('voyd-max').addEventListener('click', () => window.electronAPI?.maximize());
-          document.getElementById('voyd-close').addEventListener('click', () => window.electronAPI?.close());
-        }
-      }
-    `)
-  })
-
-  // Global keybinds
+  // FIX 4: Keybinds via IPC instead of executeJavaScript
   globalShortcut.register('CommandOrControl+Shift+M', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'toggle_mute' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'toggle_mute')
   })
 
   globalShortcut.register('CommandOrControl+Shift+D', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'toggle_deafen' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'toggle_deafen')
   })
 
   globalShortcut.register('CommandOrControl+K', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'quick_switcher' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'quick_switcher')
   })
 
   globalShortcut.register('CommandOrControl+,', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'open_settings' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'open_settings')
   })
 
   globalShortcut.register('Alt+Up', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'navigate_up' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'navigate_up')
   })
 
   globalShortcut.register('Alt+Down', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'navigate_down' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'navigate_down')
   })
 
   globalShortcut.register('Alt+Shift+Up', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'navigate_unread_up' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'navigate_unread_up')
   })
 
   globalShortcut.register('Alt+Shift+Down', () => {
-    mainWindow?.webContents.executeJavaScript(
-      `window.dispatchEvent(new CustomEvent('voyd-keybind', { detail: { action: 'navigate_unread_down' } }))`
-    )
+    mainWindow?.webContents.send('keybind', 'navigate_unread_down')
   })
 
   // Check for updates after load
