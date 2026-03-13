@@ -5,6 +5,20 @@ const path = require('path')
 let tray = null
 let mainWindow = null
 
+// Single instance lock
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+}
+
 // Auto updater config
 autoUpdater.autoDownload = true
 autoUpdater.autoInstallOnAppQuit = true
