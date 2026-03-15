@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">VOYD</string>
+    <string name="title_activity_main">VOYD</string>
+    <string name="package_name">com.voyd.app</string>
+    <string name="custom_url_scheme">com.voyd.app</string>
+</resources>

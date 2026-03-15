@@ -3,7 +3,9 @@
     "allow": [
       "Bash(cd \"/c/Users/matt/OneDrive/Desktop/Voyd desktop/voyd-desktop\" && npm start)",
       "Bash(cd \"/c/Users/matt/OneDrive/Desktop/Voyd desktop/voyd-desktop\" && npx electron .)",
-      "WebFetch(domain:joinvoyd.com)"
+      "WebFetch(domain:joinvoyd.com)",
+      "Bash(cd:*)",
+      "Bash(ls:*)"
     ]
   }
 }

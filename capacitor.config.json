@@ -1,0 +1,9 @@
+{
+  "appId": "com.voyd.app",
+  "appName": "VOYD",
+  "webDir": "dist",
+  "server": {
+    "url": "https://joinvoyd.com/app",
+    "cleartext": false
+  }
+}
