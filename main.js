@@ -168,6 +168,12 @@ function createWindow() {
     })
   }
 
+  // Inject desktop app version into the web app's window object
+  mainWindow.webContents.on('did-finish-load', () => {
+    const version = app.getVersion()
+    mainWindow.webContents.executeJavaScript(`window.__VOYD_VERSION__ = "${version}";`)
+  })
+
   // FIX 2: Proper URL validation using URL parsing instead of startsWith
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     try {
