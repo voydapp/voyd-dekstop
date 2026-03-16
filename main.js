@@ -29,12 +29,28 @@ autoUpdater.setFeedURL({
   private: false
 })
 
+autoUpdater.on('checking-for-update', () => {
+  mainWindow?.webContents.send('update-status', 'checking')
+})
+
 autoUpdater.on('update-available', () => {
   mainWindow?.webContents.send('update-status', 'available')
 })
 
+autoUpdater.on('update-not-available', () => {
+  mainWindow?.webContents.send('update-status', 'not-available')
+})
+
+autoUpdater.on('download-progress', (progress) => {
+  mainWindow?.webContents.send('update-status', 'downloading', { percent: Math.round(progress.percent) })
+})
+
 autoUpdater.on('update-downloaded', () => {
   mainWindow?.webContents.send('update-status', 'ready')
+})
+
+autoUpdater.on('error', (err) => {
+  mainWindow?.webContents.send('update-status', 'error', { message: err?.message || 'Update check failed' })
 })
 
 // IPC window controls
@@ -72,6 +88,11 @@ ipcMain.on('install-update', (event) => {
 
 // FIX 4: Version via IPC instead of executeJavaScript
 ipcMain.handle('get-version', () => app.getVersion())
+
+// Manual update check from renderer
+ipcMain.on('check-for-updates', () => {
+  autoUpdater.checkForUpdates()
+})
 
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png')).resize({ width: 16, height: 16 })
@@ -125,7 +146,6 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
     frame: false,
-    titleBarStyle: 'hidden',
   })
 
   mainWindow.loadURL('https://joinvoyd.com/app')
@@ -161,10 +181,17 @@ function createWindow() {
     callback(allowedPermissions.includes(permission))
   })
 
-  // FIX 11: Disable DevTools in production builds
-  if (app.isPackaged) {
-    mainWindow.webContents.on('devtools-opened', () => {
-      mainWindow.webContents.closeDevTools()
+  // DevTools toggle — Ctrl+Shift+I toggles open/close (disabled in production)
+  if (!app.isPackaged) {
+    mainWindow.webContents.on('before-input-event', (_event, input) => {
+      if (input.control && input.shift && input.key.toLowerCase() === 'i') {
+        if (mainWindow.webContents.isDevToolsOpened()) {
+          mainWindow.webContents.closeDevTools()
+        } else {
+          mainWindow.webContents.openDevTools()
+        }
+        _event.preventDefault()
+      }
     })
   }
 
@@ -174,13 +201,22 @@ function createWindow() {
     mainWindow.webContents.executeJavaScript(`window.__VOYD_VERSION__ = "${version}";`)
   })
 
-  // FIX 2: Proper URL validation using URL parsing instead of startsWith
+  // Allowed origins for in-app navigation (OAuth providers + Supabase auth)
+  const allowedNavigationOrigins = [
+    'https://joinvoyd.com',
+    'https://accounts.google.com',
+    'https://github.com',
+    'https://discord.com',
+  ]
+
+  // Handle new window requests — OAuth popups open in system browser, joinvoyd.com stays in-app
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url)
       if (parsed.origin === 'https://joinvoyd.com') {
         return { action: 'allow' }
       }
+      // OAuth provider URLs — open in system browser so sign-in works
       if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
         shell.openExternal(url)
       }
@@ -190,13 +226,20 @@ function createWindow() {
     return { action: 'deny' }
   })
 
-  // FIX 1: Restrict navigation to joinvoyd.com origin only
+  // Restrict in-window navigation to joinvoyd.com + OAuth providers
+  // OAuth flows redirect back to joinvoyd.com after auth, so the provider origins must be allowed
   mainWindow.webContents.on('will-navigate', (event, url) => {
     try {
       const parsed = new URL(url)
-      if (parsed.origin !== 'https://joinvoyd.com') {
-        event.preventDefault()
+      // Allow Supabase auth callbacks (joinvoyd.com/auth/callback etc.)
+      if (allowedNavigationOrigins.some(origin => parsed.origin === origin)) {
+        return
       }
+      // Allow Supabase auth URLs (e.g. *.supabase.co for OAuth flow)
+      if (parsed.hostname.endsWith('.supabase.co')) {
+        return
+      }
+      event.preventDefault()
     } catch {
       event.preventDefault()
     }

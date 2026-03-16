@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
@@ -37,10 +37,12 @@
   "author": "voydapp",
   "license": "ISC",
   "devDependencies": {
+    "@capacitor/cli": "^8.2.0",
     "electron": "^40.8.0",
     "electron-builder": "^26.8.1"
   },
   "dependencies": {
+    "@capacitor/android": "^8.2.0",
     "electron-updater": "^6.3.9"
   }
 }
