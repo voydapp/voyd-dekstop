@@ -37,42 +37,54 @@ window.addEventListener('DOMContentLoaded', () => {
       top: 0;
       left: 0;
       right: 0;
-      height: 32px;
-      -webkit-app-region: drag;
-      z-index: 99999;
+      height: 40px;
+      -webkit-app-region: no-drag;
+      z-index: 99998;
       pointer-events: none;
+      display: none;
+    }
+    #voyd-drag-region.voyd-app-mode {
+      display: block;
+      -webkit-app-region: drag;
     }
     #voyd-titlebar {
       position: fixed;
       top: 0;
-      left: 0;
       right: 0;
-      height: 32px;
+      left: auto;
+      height: 40px;
       background: transparent;
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      -webkit-app-region: drag;
+      -webkit-app-region: no-drag;
       z-index: 999999;
+      padding: 0;
+      margin: 0;
     }
-    #voyd-titlebar.voyd-hidden { display: none; }
+    #voyd-titlebar.voyd-app-mode {
+      left: 0;
+    }
     #voyd-titlebar button {
       -webkit-app-region: no-drag;
+      pointer-events: all;
       border: none;
       background: transparent;
       color: rgba(255,255,255,0.5);
-      width: 32px;
-      height: 22px;
-      font-size: 13px;
+      width: 40px;
+      height: 40px;
+      font-size: 16px;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       border-radius: 4px;
-      margin-right: 2px;
+      margin: 0;
+      padding: 0;
+      flex-shrink: 0;
     }
-    #voyd-titlebar button:hover { background: rgba(255,255,255,0.1); color: white; }
-    #voyd-titlebar #voyd-close:hover { background: #e81123; color: white; }
+    #voyd-titlebar button:hover { background: rgba(255,255,255,0.1) !important; color: white !important; }
+    #voyd-titlebar #voyd-close:hover { background: rgba(232,17,35,0.9) !important; color: white !important; }
   `
   document.head.appendChild(style)
 
@@ -90,29 +102,40 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="voyd-close" title="Close">&#10005;</button>
   `
   document.body.prepend(bar)
-  document.getElementById('voyd-min').addEventListener('click', () => ipcRenderer.send('window-minimize'))
-  document.getElementById('voyd-max').addEventListener('click', () => ipcRenderer.send('window-maximize'))
-  document.getElementById('voyd-close').addEventListener('click', () => ipcRenderer.send('window-close'))
+  document.getElementById('voyd-min').addEventListener('click', () => {
+    console.log('minimize clicked')
+    ipcRenderer.send('window-minimize')
+  })
+  document.getElementById('voyd-max').addEventListener('click', () => {
+    console.log('maximize clicked')
+    ipcRenderer.send('window-maximize')
+  })
+  document.getElementById('voyd-close').addEventListener('click', () => {
+    console.log('close clicked')
+    ipcRenderer.send('window-close')
+  })
 
-  // Toggle titlebar visibility based on route — hide on /app (CommunicationHeader
-  // provides its own controls there), show everywhere else
-  function updateTitlebarVisibility() {
-    const onAppPage = window.location.pathname.startsWith('/app')
-    bar.classList.toggle('voyd-hidden', onAppPage)
-  }
+  const origPush = history.pushState.bind(history)
+  const origReplace = history.replaceState.bind(history)
+  history.pushState = function (...args) { origPush(...args); updateTitlebar() }
+  history.replaceState = function (...args) { origReplace(...args); updateTitlebar() }
+  window.addEventListener('popstate', updateTitlebar)
+})
 
-  updateTitlebarVisibility()
+// voyd-app-mode: enables drag region and titlebar drag on /app routes
+// On login/signup: buttons still visible but no drag interference
+// Defined outside DOMContentLoaded so the second listener below can call it
+// after bar/dragRegion are injected (listeners fire in registration order).
+function updateTitlebar() {
+  const bar = document.getElementById('voyd-titlebar')
+  const dragRegion = document.getElementById('voyd-drag-region')
+  if (!bar || !dragRegion) return
+  const onApp = window.location.pathname.startsWith('/app')
+  bar.classList.toggle('voyd-app-mode', onApp)
+  dragRegion.classList.toggle('voyd-app-mode', onApp)
+}
 
-  // React Router uses pushState/replaceState for navigation, so listen for those
-  const origPushState = history.pushState.bind(history)
-  const origReplaceState = history.replaceState.bind(history)
-  history.pushState = function (...args) {
-    origPushState(...args)
-    updateTitlebarVisibility()
-  }
-  history.replaceState = function (...args) {
-    origReplaceState(...args)
-    updateTitlebarVisibility()
-  }
-  window.addEventListener('popstate', updateTitlebarVisibility)
+document.addEventListener('DOMContentLoaded', () => {
+  updateTitlebar()
+  setTimeout(updateTitlebar, 500)
 })
