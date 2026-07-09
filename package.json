@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.23",
+  "version": "1.0.39",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
@@ -11,6 +11,17 @@
   "build": {
     "appId": "com.voyd.desktop",
     "productName": "VOYD",
+    "compression": "maximum",
+    "files": [
+      "main.js",
+      "preload.js",
+      "assets/**",
+      "node_modules/**",
+      "!node_modules/**/test/**",
+      "!node_modules/**/*.md",
+      "!node_modules/**/LICENSE",
+      "!node_modules/**/*.map"
+    ],
     "directories": {
       "output": "dist"
     },
@@ -23,6 +34,14 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "differentialPackage": false,
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false,
+      "runAfterFinish": true
     },
     "mac": {
       "target": "dmg",

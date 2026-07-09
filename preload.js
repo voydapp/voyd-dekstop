@@ -138,4 +138,14 @@ function updateTitlebar() {
 document.addEventListener('DOMContentLoaded', () => {
   updateTitlebar()
   setTimeout(updateTitlebar, 500)
+  setTimeout(updateTitlebar, 1500)
+
+  const titleEl = document.querySelector('title')
+  if (titleEl) {
+    new MutationObserver(updateTitlebar).observe(titleEl, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    })
+  }
 })
