@@ -137,15 +137,12 @@ function updateTitlebar() {
 
 document.addEventListener('DOMContentLoaded', () => {
   updateTitlebar()
-  setTimeout(updateTitlebar, 500)
-  setTimeout(updateTitlebar, 1500)
 
-  const titleEl = document.querySelector('title')
-  if (titleEl) {
-    new MutationObserver(updateTitlebar).observe(titleEl, {
-      childList: true,
-      characterData: true,
-      subtree: true,
-    })
-  }
+  // Poll every 100ms for 5 seconds to catch React Router redirects
+  let polls = 0
+  const interval = setInterval(() => {
+    updateTitlebar()
+    polls++
+    if (polls >= 50) clearInterval(interval)
+  }, 100)
 })
