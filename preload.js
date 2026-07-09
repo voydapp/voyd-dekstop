@@ -36,16 +36,11 @@ window.addEventListener('DOMContentLoaded', () => {
       position: fixed;
       top: 0;
       left: 0;
-      right: 0;
-      height: 40px;
-      -webkit-app-region: no-drag;
+      right: 120px;
+      height: 32px;
+      -webkit-app-region: drag;
       z-index: 99998;
       pointer-events: none;
-      display: none;
-    }
-    #voyd-drag-region.voyd-app-mode {
-      display: block;
-      -webkit-app-region: drag;
     }
     #voyd-titlebar {
       position: fixed;
@@ -128,11 +123,9 @@ window.addEventListener('DOMContentLoaded', () => {
 // after bar/dragRegion are injected (listeners fire in registration order).
 function updateTitlebar() {
   const bar = document.getElementById('voyd-titlebar')
-  const dragRegion = document.getElementById('voyd-drag-region')
-  if (!bar || !dragRegion) return
+  if (!bar) return
   const onApp = window.location.pathname.startsWith('/app')
   bar.classList.toggle('voyd-app-mode', onApp)
-  dragRegion.classList.toggle('voyd-app-mode', onApp)
 }
 
 document.addEventListener('DOMContentLoaded', () => {
