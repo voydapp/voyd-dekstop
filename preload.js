@@ -59,6 +59,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     #voyd-titlebar.voyd-app-mode {
       left: 0;
+      -webkit-app-region: no-drag;
     }
     #voyd-titlebar button {
       -webkit-app-region: no-drag;
@@ -117,8 +118,8 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('popstate', updateTitlebar)
 })
 
-// voyd-app-mode: enables drag region and titlebar drag on /app routes
-// On login/signup: buttons still visible but no drag interference
+// voyd-app-mode: extends titlebar to full width on /app routes
+// Dragging is handled exclusively by #voyd-drag-region on all routes
 // Defined outside DOMContentLoaded so the second listener below can call it
 // after bar/dragRegion are injected (listeners fire in registration order).
 function updateTitlebar() {
