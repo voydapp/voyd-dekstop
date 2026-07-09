@@ -23,7 +23,7 @@
       "!node_modules/**/*.map"
     ],
     "directories": {
-      "output": "dist2"
+      "output": "dist"
     },
     "publish": {
       "provider": "github",
