@@ -20,6 +20,7 @@ if (!gotTheLock) {
 }
 
 // Auto updater config
+autoUpdater.forceDevUpdateConfig = false
 autoUpdater.autoDownload = true
 autoUpdater.autoInstallOnAppQuit = true
 autoUpdater.setFeedURL({
@@ -46,7 +47,14 @@ autoUpdater.on('download-progress', (progress) => {
 })
 
 autoUpdater.on('update-downloaded', () => {
-  mainWindow?.webContents.send('update-status', 'ready')
+  mainWindow?.webContents.executeJavaScript(`
+    window.dispatchEvent(new CustomEvent('voyd-update', { detail: { status: 'ready' } }))
+  `)
+  setTimeout(() => {
+    if (tray) { tray.destroy(); tray = null }
+    if (mainWindow) { mainWindow.destroy(); mainWindow = null }
+    autoUpdater.quitAndInstall(false, true)
+  }, 2000)
 })
 
 autoUpdater.on('error', (err) => {
@@ -82,7 +90,7 @@ ipcMain.on('install-update', (event) => {
     message: 'A new version is ready. Restart now to apply the update?',
     buttons: ['Restart', 'Later']
   }).then(({ response }) => {
-    if (response === 0) autoUpdater.quitAndInstall()
+    if (response === 0) autoUpdater.quitAndInstall(false, true)
   })
 })
 
@@ -144,35 +152,37 @@ function createWindow() {
       contextIsolation: true,
       webSecurity: true,
       preload: path.join(__dirname, 'preload.js'),
+      partition: 'persist:voyd',
     },
     frame: false,
   })
 
   mainWindow.loadURL('https://joinvoyd.com/app')
 
-  // FIX 6: Enforce a fallback CSP if the server doesn't provide one
+  const VOYD_CSP = [
+    "default-src 'self' https://joinvoyd.com https://*.joinvoyd.com",
+    "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com",
+    "connect-src 'self' https://joinvoyd.com https://*.joinvoyd.com https://*.supabase.co wss://*.supabase.co wss://fjvijrbfbzdjsyiwqwfd.supabase.co https://*.agora.io wss://*.agora.io https://livekit.io wss://*.livekit.io",
+    "img-src 'self' data: blob: https:",
+    "media-src 'self' blob: https:",
+    "style-src 'self' 'unsafe-inline' https://joinvoyd.com https://*.joinvoyd.com",
+    "font-src 'self' data: https:",
+    "frame-src 'self' https:",
+    "worker-src 'self' blob:"
+  ].join('; ')
+
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = details.responseHeaders || {}
-    const hasCSP = Object.keys(headers).some(k => k.toLowerCase() === 'content-security-policy')
-    if (!hasCSP) {
-      callback({
-        responseHeaders: {
-          ...headers,
-          'Content-Security-Policy': [
-            "default-src 'self' https://joinvoyd.com https://*.joinvoyd.com; " +
-            "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval'; " +
-            "style-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline'; " +
-            "img-src * data: blob:; " +
-            "media-src * data: blob:; " +
-            "connect-src *; " +
-            "font-src * data:; " +
-            "frame-src 'self' https://joinvoyd.com https://*.joinvoyd.com;"
-          ]
-        }
-      })
-    } else {
-      callback({ responseHeaders: headers })
-    }
+    // Always override server CSP with our hardcoded policy
+    const filtered = Object.fromEntries(
+      Object.entries(headers).filter(([k]) => k.toLowerCase() !== 'content-security-policy')
+    )
+    callback({
+      responseHeaders: {
+        ...filtered,
+        'Content-Security-Policy': [VOYD_CSP]
+      }
+    })
   })
 
   // FIX 10: Restrict permissions to only what VOYD needs
