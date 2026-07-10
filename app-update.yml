@@ -1,0 +1,4 @@
+provider: github
+owner: voydapp
+repo: voyd-dekstop
+updaterCacheDirName: voyd-dekstop-updater

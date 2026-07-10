@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.53",
+  "version": "1.0.54",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
@@ -15,6 +15,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "app-update.yml",
       "assets/**",
       "node_modules/**",
       "!node_modules/**/test/**",
@@ -22,8 +23,14 @@
       "!node_modules/**/LICENSE",
       "!node_modules/**/*.map"
     ],
+    "extraResources": [
+      {
+        "from": "app-update.yml",
+        "to": "app-update.yml"
+      }
+    ],
     "directories": {
-      "output": "dist15"
+      "output": "dist16"
     },
     "publish": {
       "provider": "github",
