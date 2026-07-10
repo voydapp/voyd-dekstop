@@ -49,10 +49,24 @@ autoUpdater.on('download-progress', (progress) => {
   mainWindow?.webContents.send('update-status', 'downloading', { percent: Math.round(progress.percent) })
 })
 
-autoUpdater.on('update-downloaded', () => {
-  console.log('[updater] update-downloaded')
+let downloadedFilePath = null
+
+autoUpdater.on('update-downloaded', (info) => {
+  console.log('[updater] update-downloaded', info?.version)
   console.log('[updater] PORTABLE_EXECUTABLE_DIR:', process.env.PORTABLE_EXECUTABLE_DIR)
   console.log('[updater] execPath:', process.execPath)
+
+  // electron-updater doesn't reliably expose the path via downloadedUpdateHelper,
+  // so resolve it ourselves from the known cache location.
+  const cacheDir = path.join(app.getPath('userData'), '..', 'voyd-dekstop-updater', 'pending')
+  const expectedFile = path.join(cacheDir, `VOYD-${info.version}.exe`)
+  if (fs.existsSync(expectedFile)) {
+    downloadedFilePath = expectedFile
+    console.log('[updater] downloadedFilePath:', downloadedFilePath)
+  } else {
+    console.log('[updater] expected file not found at:', expectedFile)
+  }
+
   mainWindow?.webContents.send('update-status', 'ready')
 })
 
@@ -83,7 +97,7 @@ ipcMain.on('install-update', () => {
   try { tray?.destroy() } catch(e) {}
   tray = null
 
-  const downloadedFile = autoUpdater.downloadedUpdateHelper?.downloadedFile
+  const downloadedFile = downloadedFilePath
 
   // Find the directory containing the permanent VOYD.exe the user launched.
   // PORTABLE_EXECUTABLE_DIR often points to the updater cache, so we check
