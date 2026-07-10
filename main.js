@@ -83,15 +83,21 @@ ipcMain.on('install-update', () => {
   tray = null
 
   const downloadedFile = autoUpdater.downloadedUpdateHelper?.downloadedFile
-  const currentExe = process.execPath
+
+  // PORTABLE_EXECUTABLE_DIR is set by the portable wrapper to the folder
+  // containing the permanent exe (e.g. C:\VOYD\). process.execPath points
+  // to the temp unpack dir and must NOT be used as the copy target.
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
+  const targetExe = portableDir
+    ? path.join(portableDir, path.basename(process.execPath))
+    : process.execPath
 
   if (downloadedFile && fs.existsSync(downloadedFile)) {
-    // Portable build: quitAndInstall won't replace the exe automatically.
-    // Write a batch script that waits for us to exit, copies the new exe
-    // over the old one, then relaunches.
-    const updateScript = path.join(path.dirname(currentExe), 'voyd-update.bat')
+    // Portable build: write a batch script that waits for us to exit,
+    // copies the new exe over the permanent location, then relaunches it.
+    const updateScript = path.join(path.dirname(targetExe), 'voyd-update.bat')
     fs.writeFileSync(updateScript,
-      `@echo off\r\ntimeout /t 2 /nobreak >nul\r\ncopy /y "${downloadedFile}" "${currentExe}"\r\nstart "" "${currentExe}"\r\ndel "%~f0"\r\n`
+      `@echo off\r\ntimeout /t 2 /nobreak >nul\r\ncopy /y "${downloadedFile}" "${targetExe}"\r\nstart "" "${targetExe}"\r\ndel "%~f0"\r\n`
     )
     require('child_process').spawn('cmd.exe', ['/c', updateScript], {
       detached: true,
