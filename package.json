@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.55",
+  "version": "1.0.56",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
@@ -30,7 +30,7 @@
       }
     ],
     "directories": {
-      "output": "dist17"
+      "output": "dist18"
     },
     "publish": {
       "provider": "github",
@@ -45,7 +45,8 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "artifactName": "VOYD-${version}.exe"
     },
     "mac": {
       "target": "dmg",
