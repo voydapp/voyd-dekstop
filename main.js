@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, dialog, session } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 
@@ -23,6 +23,7 @@ if (!gotTheLock) {
 autoUpdater.forceDevUpdateConfig = false
 autoUpdater.autoDownload = true
 autoUpdater.autoInstallOnAppQuit = false
+autoUpdater.autoRunAppAfterInstall = true
 autoUpdater.setFeedURL({
   provider: 'github',
   owner: 'voydapp',
@@ -67,24 +68,8 @@ ipcMain.on('window-close', () => {
   mainWindow?.hide()
 })
 
-// FIX 3: Validate sender origin and add confirmation before installing updates
-ipcMain.on('install-update', (event) => {
-  const senderUrl = event.senderFrame?.url || ''
-  try {
-    const parsed = new URL(senderUrl)
-    if (parsed.origin !== 'https://joinvoyd.com') return
-  } catch {
-    return
-  }
-
-  dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    title: 'Update Ready',
-    message: 'A new version is ready. Restart now to apply the update?',
-    buttons: ['Restart', 'Later']
-  }).then(({ response }) => {
-    if (response === 0) autoUpdater.quitAndInstall(false, true)
-  })
+ipcMain.on('install-update', () => {
+  autoUpdater.quitAndInstall(true, true)
 })
 
 // FIX 4: Version via IPC instead of executeJavaScript
