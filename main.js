@@ -2,6 +2,7 @@ const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeIm
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs = require('fs')
+const { execSync } = require('child_process')
 
 let tray = null
 let mainWindow = null
@@ -84,13 +85,21 @@ ipcMain.on('install-update', () => {
 
   const downloadedFile = autoUpdater.downloadedUpdateHelper?.downloadedFile
 
-  // PORTABLE_EXECUTABLE_DIR is set by the portable wrapper to the folder
-  // containing the permanent exe (e.g. C:\VOYD\). process.execPath points
-  // to the temp unpack dir and must NOT be used as the copy target.
-  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
-  const targetExe = portableDir
-    ? path.join(portableDir, path.basename(process.execPath))
-    : process.execPath
+  // Find the directory containing the permanent VOYD.exe the user launched.
+  // PORTABLE_EXECUTABLE_DIR often points to the updater cache, so we check
+  // multiple candidates and pick the first one that actually has VOYD.exe.
+  const possibleDirs = [
+    process.env.PORTABLE_EXECUTABLE_DIR,
+    path.dirname(process.env.INIT_CWD || ''),
+    'C:\\VOYD'
+  ].filter(Boolean)
+
+  const targetDir = possibleDirs.find(d => {
+    try { return fs.existsSync(path.join(d, 'VOYD.exe')) }
+    catch { return false }
+  }) || 'C:\\VOYD'
+
+  const targetExe = path.join(targetDir, 'VOYD.exe')
 
   if (downloadedFile && fs.existsSync(downloadedFile)) {
     // Portable build: write a batch script that waits for us to exit,
