@@ -120,7 +120,16 @@ ipcMain.on('install-update', () => {
     // copies the new exe over the permanent location, then relaunches it.
     const updateScript = path.join(path.dirname(targetExe), 'voyd-update.bat')
     fs.writeFileSync(updateScript,
-      `@echo off\r\ntimeout /t 2 /nobreak >nul\r\ncopy /y "${downloadedFile}" "${targetExe}"\r\nstart "" "${targetExe}"\r\ndel "%~f0"\r\n`
+      `@echo off\r\n` +
+      `:waitloop\r\n` +
+      `tasklist /fi "imagename eq VOYD.exe" 2>nul | find /i "VOYD.exe" >nul\r\n` +
+      `if not errorlevel 1 (\r\n` +
+      `  timeout /t 1 /nobreak >nul\r\n` +
+      `  goto waitloop\r\n` +
+      `)\r\n` +
+      `copy /y "${downloadedFile}" "${targetExe}"\r\n` +
+      `start "" "${targetExe}"\r\n` +
+      `del "%~f0"\r\n`
     )
     require('child_process').spawn('cmd.exe', ['/c', updateScript], {
       detached: true,
