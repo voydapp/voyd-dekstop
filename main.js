@@ -58,7 +58,7 @@ autoUpdater.on('update-downloaded', (info) => {
 
   // electron-updater doesn't reliably expose the path via downloadedUpdateHelper,
   // so resolve it ourselves from the known cache location.
-  const cacheDir = path.join(app.getPath('userData'), '..', 'voyd-dekstop-updater', 'pending')
+  const cacheDir = path.join(app.getPath('appData').replace('Roaming', 'Local'), 'voyd-dekstop-updater', 'pending')
   const expectedFile = path.join(cacheDir, `VOYD-${info.version}.exe`)
   if (fs.existsSync(expectedFile)) {
     downloadedFilePath = expectedFile
