@@ -72,9 +72,17 @@ let isInstalling = false
 ipcMain.on('install-update', () => {
   if (isInstalling) return
   isInstalling = true
+
   app.isQuitting = true
-  if (tray) { tray.destroy(); tray = null }
-  autoUpdater.quitAndInstall(true, true)
+
+  try { tray?.destroy() } catch(e) {}
+  tray = null
+
+  BrowserWindow.getAllWindows().forEach(w => w.destroy())
+
+  setTimeout(() => {
+    autoUpdater.quitAndInstall(false, true)
+  }, 500)
 })
 
 // FIX 4: Version via IPC instead of executeJavaScript
