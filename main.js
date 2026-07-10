@@ -1,6 +1,7 @@
 const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
+const fs = require('fs')
 
 let tray = null
 let mainWindow = null
@@ -81,15 +82,36 @@ ipcMain.on('install-update', () => {
   try { tray?.destroy() } catch(e) {}
   tray = null
 
-  BrowserWindow.getAllWindows().forEach(w => w.destroy())
+  const downloadedFile = autoUpdater.downloadedUpdateHelper?.downloadedFile
+  const currentExe = process.execPath
 
-  setTimeout(() => {
-    autoUpdater.quitAndInstall(false, true)
-  }, 500)
+  if (downloadedFile && fs.existsSync(downloadedFile)) {
+    // Portable build: quitAndInstall won't replace the exe automatically.
+    // Write a batch script that waits for us to exit, copies the new exe
+    // over the old one, then relaunches.
+    const updateScript = path.join(path.dirname(currentExe), 'voyd-update.bat')
+    fs.writeFileSync(updateScript,
+      `@echo off\r\ntimeout /t 2 /nobreak >nul\r\ncopy /y "${downloadedFile}" "${currentExe}"\r\nstart "" "${currentExe}"\r\ndel "%~f0"\r\n`
+    )
+    require('child_process').spawn('cmd.exe', ['/c', updateScript], {
+      detached: true,
+      stdio: 'ignore'
+    }).unref()
+    app.quit()
+  } else {
+    // Fallback: let electron-updater handle it (works if PORTABLE_EXECUTABLE_DIR is set)
+    BrowserWindow.getAllWindows().forEach(w => w.destroy())
+    setTimeout(() => autoUpdater.quitAndInstall(false, true), 500)
+  }
 })
 
 // FIX 4: Version via IPC instead of executeJavaScript
 ipcMain.handle('get-version', () => app.getVersion())
+
+ipcMain.handle('get-portable-dir', () => ({
+  portableDir: process.env.PORTABLE_EXECUTABLE_DIR,
+  execPath: process.execPath
+}))
 
 // Manual update check from renderer
 ipcMain.on('check-for-updates', () => {

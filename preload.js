@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.send('install-update'),
   checkForUpdates: () => ipcRenderer.send('check-for-updates'),
   getVersion: () => ipcRenderer.invoke('get-version'),
+  getPortableDir: () => ipcRenderer.invoke('get-portable-dir'),
   onUpdateStatus: (callback) => {
     ipcRenderer.on('update-status', (_event, status, data) => callback(status, data))
   },
