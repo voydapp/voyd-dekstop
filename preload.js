@@ -56,6 +56,7 @@ window.addEventListener('DOMContentLoaded', () => {
       z-index: 999999;
       padding: 0;
       margin: 0;
+      pointer-events: none;
     }
     #voyd-titlebar.voyd-app-mode {
       left: 0;
@@ -63,7 +64,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     #voyd-titlebar button {
       -webkit-app-region: no-drag;
-      pointer-events: all;
+      pointer-events: auto;
       border: none;
       background: transparent;
       color: rgba(255,255,255,0.5);
