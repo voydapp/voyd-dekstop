@@ -22,7 +22,7 @@ if (!gotTheLock) {
 // Auto updater config
 autoUpdater.forceDevUpdateConfig = false
 autoUpdater.autoDownload = true
-autoUpdater.autoInstallOnAppQuit = true
+autoUpdater.autoInstallOnAppQuit = false
 autoUpdater.setFeedURL({
   provider: 'github',
   owner: 'voydapp',
@@ -47,14 +47,7 @@ autoUpdater.on('download-progress', (progress) => {
 })
 
 autoUpdater.on('update-downloaded', () => {
-  mainWindow?.webContents.executeJavaScript(`
-    window.dispatchEvent(new CustomEvent('voyd-update', { detail: { status: 'ready' } }))
-  `)
-  setTimeout(() => {
-    if (tray) { tray.destroy(); tray = null }
-    if (mainWindow) { mainWindow.destroy(); mainWindow = null }
-    autoUpdater.quitAndInstall(false, true)
-  }, 2000)
+  mainWindow?.webContents.send('update-status', 'ready')
 })
 
 autoUpdater.on('error', (err) => {
