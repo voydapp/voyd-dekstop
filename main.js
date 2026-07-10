@@ -48,6 +48,9 @@ autoUpdater.on('download-progress', (progress) => {
 })
 
 autoUpdater.on('update-downloaded', () => {
+  console.log('[updater] update-downloaded')
+  console.log('[updater] PORTABLE_EXECUTABLE_DIR:', process.env.PORTABLE_EXECUTABLE_DIR)
+  console.log('[updater] execPath:', process.execPath)
   mainWindow?.webContents.send('update-status', 'ready')
 })
 
