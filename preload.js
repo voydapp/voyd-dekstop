@@ -125,9 +125,13 @@ window.addEventListener('DOMContentLoaded', () => {
 // after bar/dragRegion are injected (listeners fire in registration order).
 function updateTitlebar() {
   const bar = document.getElementById('voyd-titlebar')
+  const dragRegion = document.getElementById('voyd-drag-region')
   if (!bar) return
   const onApp = window.location.pathname.startsWith('/app')
   bar.classList.toggle('voyd-app-mode', onApp)
+  // On /app routes, CommunicationHeader provides its own drag region — hide ours
+  // so it doesn't intercept clicks on header icon buttons
+  if (dragRegion) dragRegion.style.display = onApp ? 'none' : ''
 }
 
 document.addEventListener('DOMContentLoaded', () => {
