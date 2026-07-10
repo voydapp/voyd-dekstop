@@ -68,7 +68,12 @@ ipcMain.on('window-close', () => {
   mainWindow?.hide()
 })
 
+let isInstalling = false
 ipcMain.on('install-update', () => {
+  if (isInstalling) return
+  isInstalling = true
+  app.isQuitting = true
+  if (tray) { tray.destroy(); tray = null }
   autoUpdater.quitAndInstall(true, true)
 })
 
