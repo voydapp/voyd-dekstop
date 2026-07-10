@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.52",
+  "version": "1.0.53",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
@@ -23,7 +23,7 @@
       "!node_modules/**/*.map"
     ],
     "directories": {
-      "output": "dist14"
+      "output": "dist15"
     },
     "publish": {
       "provider": "github",
