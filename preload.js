@@ -26,6 +26,12 @@ window.addEventListener('voyd-check-update', () => {
   ipcRenderer.send('check-for-updates')
 })
 
+// Bridge voyd-show-and-focus CustomEvent (from a clicked OS notification) to IPC —
+// the window may be hidden in the tray, which only the main process can undo.
+window.addEventListener('voyd-show-and-focus', () => {
+  ipcRenderer.send('show-and-focus-window')
+})
+
 // Inject drag region and titlebar for frameless window
 // Both are always injected; the titlebar (with buttons) is hidden on /app where
 // CommunicationHeader provides its own controls, and shown on all other pages

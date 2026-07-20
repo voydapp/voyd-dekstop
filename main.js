@@ -87,6 +87,18 @@ ipcMain.on('window-close', () => {
   mainWindow?.hide()
 })
 
+// A clicked OS notification asks us to restore the window — it may be hidden
+// in the tray or minimized, neither of which the renderer's own window.focus()
+// can undo by itself.
+ipcMain.on('show-and-focus-window', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  mainWindow.show()
+  mainWindow.focus()
+})
+
 let isInstalling = false
 ipcMain.on('install-update', () => {
   if (isInstalling) return
@@ -212,6 +224,31 @@ function createWindow() {
   })
 
   mainWindow.loadURL('https://joinvoyd.com/app')
+
+  // Notifications (and everything else) live entirely in the renderer's own
+  // Realtime subscription — if it crashes or hangs, reload rather than sitting
+  // silently dead in the tray. Guarded against reload-looping a persistently
+  // broken renderer: only auto-reload if the last one was >30s ago.
+  let lastAutoReload = 0
+  const RELOAD_COOLDOWN_MS = 30000
+  const reloadIfNotLooping = (reason) => {
+    const now = Date.now()
+    if (now - lastAutoReload < RELOAD_COOLDOWN_MS) {
+      console.error('[main]', reason, '— skipping reload, still within cooldown from last auto-reload')
+      return
+    }
+    lastAutoReload = now
+    console.error('[main]', reason, '— reloading')
+    if (!app.isQuitting) mainWindow?.webContents.reload()
+  }
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    reloadIfNotLooping('renderer process gone: ' + details.reason)
+  })
+
+  mainWindow.webContents.on('unresponsive', () => {
+    reloadIfNotLooping('renderer unresponsive')
+  })
 
   const VOYD_CSP = [
     "default-src 'self' https://joinvoyd.com https://*.joinvoyd.com",
