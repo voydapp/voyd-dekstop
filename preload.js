@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onKeybind: (callback) => {
     ipcRenderer.on('keybind', (_event, action) => callback(action))
   },
+  setActivityDetectionEnabled: (enabled) => ipcRenderer.send('set-activity-detection-enabled', enabled),
+  onGameDetected: (callback) => {
+    ipcRenderer.on('game-detected', (_event, game) => callback(game))
+  },
 })
 
 // Bridge update-status IPC events to CustomEvents so the web app (App.tsx) can listen

@@ -42,7 +42,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.ico",
@@ -72,6 +74,7 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "ps-list": "^9.0.0"
   }
 }

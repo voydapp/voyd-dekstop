@@ -3,6 +3,7 @@ const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs = require('fs')
 const { execSync } = require('child_process')
+const gameDetection = require('./gameDetection')
 
 let tray = null
 let mainWindow = null
@@ -166,6 +167,17 @@ ipcMain.handle('get-portable-dir', () => ({
 // Manual update check from renderer
 ipcMain.on('check-for-updates', () => {
   autoUpdater.checkForUpdates()
+})
+
+// Rich Presence — process detection. The renderer (web app) controls on/off
+// via show_activity_status; confirmed detections/clears are relayed back to
+// it, which writes through the presence table the same way manual_status does.
+gameDetection.init((game) => {
+  mainWindow?.webContents.send('game-detected', game)
+})
+
+ipcMain.on('set-activity-detection-enabled', (_event, enabled) => {
+  gameDetection.setEnabled(enabled)
 })
 
 function createTray() {
