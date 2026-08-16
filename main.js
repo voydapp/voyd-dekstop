@@ -35,18 +35,22 @@ autoUpdater.setFeedURL({
 })
 
 autoUpdater.on('checking-for-update', () => {
+  console.log('[updater] checking-for-update')
   mainWindow?.webContents.send('update-status', 'checking')
 })
 
-autoUpdater.on('update-available', () => {
+autoUpdater.on('update-available', (info) => {
+  console.log('[updater] update-available', info?.version)
   mainWindow?.webContents.send('update-status', 'available')
 })
 
-autoUpdater.on('update-not-available', () => {
+autoUpdater.on('update-not-available', (info) => {
+  console.log('[updater] update-not-available, current is latest:', info?.version)
   mainWindow?.webContents.send('update-status', 'not-available')
 })
 
 autoUpdater.on('download-progress', (progress) => {
+  console.log('[updater] download-progress', Math.round(progress.percent) + '%')
   mainWindow?.webContents.send('update-status', 'downloading', { percent: Math.round(progress.percent) })
 })
 
@@ -72,6 +76,7 @@ autoUpdater.on('update-downloaded', (info) => {
 })
 
 autoUpdater.on('error', (err) => {
+  console.log('[updater] error', err?.message || err)
   mainWindow?.webContents.send('update-status', 'error', { message: err?.message || 'Update check failed' })
 })
 
