@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "publish": "electron-builder --publish always"
+    "publish": "electron-builder --publish always && node scripts/generate-latest-yml.js"
   },
   "build": {
     "appId": "com.voyd.desktop",
