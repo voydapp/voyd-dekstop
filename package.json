@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.75",
+  "version": "1.0.76",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {
@@ -48,10 +48,10 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "artifactName": "VOYD-${version}.exe"
+      "artifactName": "VOYD.exe"
     },
     "portable": {
-      "artifactName": "VOYD-${version}.exe",
+      "artifactName": "VOYD.exe",
       "requestExecutionLevel": "user",
       "unpackDirName": "voyd-app"
     },
