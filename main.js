@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs = require('fs')
@@ -7,6 +7,7 @@ const gameDetection = require('./gameDetection')
 
 let tray = null
 let mainWindow = null
+let overlayWindow = null
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock()
@@ -184,6 +185,62 @@ gameDetection.init((game) => {
 ipcMain.on('set-activity-detection-enabled', (_event, enabled) => {
   gameDetection.setEnabled(enabled)
 })
+
+// Overlay — voice channel state. The renderer (web app) owns VoiceContext
+// and pushes participant snapshots down; we just relay them to the overlay
+// window, which has no Supabase session of its own (same split as Rich
+// Presence: renderer knows state, main process only routes it).
+ipcMain.on('voice-state-update', (_event, state) => {
+  overlayWindow?.webContents.send('voice-state', state)
+})
+
+function createOverlayWindow() {
+  const OVERLAY_WIDTH = 280
+  const OVERLAY_HEIGHT = 400
+  const MARGIN = 16
+
+  const { x: waX, y: waY, width: waWidth } = screen.getPrimaryDisplay().workArea
+
+  overlayWindow = new BrowserWindow({
+    width: OVERLAY_WIDTH,
+    height: OVERLAY_HEIGHT,
+    x: Math.round(waX + waWidth - OVERLAY_WIDTH - MARGIN),
+    y: Math.round(waY + MARGIN),
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    focusable: false,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'overlay-preload.js'),
+      // Own in-memory session, deliberately not the app's default session —
+      // keeps it out of reach of the CSP/permission overrides below, which
+      // are scoped to session.defaultSession and target joinvoyd.com, not
+      // this window's local static content.
+      partition: 'overlay-window',
+    },
+  })
+
+  // 'screen-saver' level (not just alwaysOnTop:true) is what actually keeps
+  // an Electron window above most borderless/windowed-fullscreen games —
+  // plain always-on-top alone frequently loses to the game's own surface.
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+  overlayWindow.loadFile(path.join(__dirname, 'overlay.html'))
+
+  // No interactive elements in this phase (read-only participant list), so
+  // click-through can just be permanent rather than toggled — see report.
+  overlayWindow.setIgnoreMouseEvents(true, { forward: true })
+
+  overlayWindow.on('closed', () => { overlayWindow = null })
+}
 
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png')).resize({ width: 16, height: 16 })
@@ -428,6 +485,21 @@ function createWindow() {
 app.whenReady().then(() => {
   createTray()
   createWindow()
+  createOverlayWindow()
+
+  // Overlay toggle — global so it works while a game window has focus.
+  // Confirmed against existing globalShortcut registrations (Shift+M,
+  // Shift+D, K, comma, Alt+arrows) before picking Shift+O: no conflict.
+  globalShortcut.register('CommandOrControl+Shift+O', () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return
+    if (overlayWindow.isVisible()) {
+      overlayWindow.hide()
+    } else {
+      // showInactive, not show — the overlay must never steal focus from
+      // the game underneath.
+      overlayWindow.showInactive()
+    }
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

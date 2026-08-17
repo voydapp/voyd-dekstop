@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onGameDetected: (callback) => {
     ipcRenderer.on('game-detected', (_event, game) => callback(game))
   },
+  sendVoiceState: (state) => ipcRenderer.send('voice-state-update', state),
 })
 
 // Bridge update-status IPC events to CustomEvents so the web app (App.tsx) can listen

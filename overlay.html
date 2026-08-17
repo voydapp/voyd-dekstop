@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'">
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #panel {
+    display: none;
+    background: rgba(20, 20, 24, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #e6e6e6;
+    font-size: 13px;
+    box-sizing: border-box;
+    width: 100%;
+  }
+  #panel.visible { display: block; }
+  #channel-name {
+    font-weight: 600;
+    font-size: 11px;
+    color: #9a9aa5;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .participant {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4a4a52;
+    flex-shrink: 0;
+  }
+  .dot.speaking { background: #3ba55c; }
+  .name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #e05252;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+  <div id="panel"></div>
+  <script src="overlay-renderer.js"></script>
+</body>
+</html>
