@@ -2,16 +2,57 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'">
 <style>
   html, body {
     margin: 0;
     padding: 0;
     background: transparent;
-    overflow: hidden;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-user-select: none;
     user-select: none;
+  }
+  #overlay-root {
+    max-height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  #camera-tiles {
+    display: none;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  #camera-tiles.visible { display: flex; }
+  .cam-tile {
+    position: relative;
+    width: 76px;
+    height: 57px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+  }
+  .cam-img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .cam-label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 2px 4px;
+    font-size: 9px;
+    line-height: 1.2;
+    color: #f0f0f0;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.75), transparent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   #panel {
     display: none;
@@ -67,7 +108,10 @@
 </style>
 </head>
 <body>
-  <div id="panel"></div>
+  <div id="overlay-root">
+    <div id="camera-tiles"></div>
+    <div id="panel"></div>
+  </div>
   <script src="overlay-renderer.js"></script>
 </body>
 </html>

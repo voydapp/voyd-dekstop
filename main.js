@@ -368,6 +368,14 @@ let overlayPosition = 'top-right'
 // Streamer Mode just by forgetting to check it.
 let streamerMode = false
 
+// Phase 4 — Camera Tiles. Mirrors the DB default (overlay_show_camera_tiles
+// defaults true, opt-out) until the renderer's first settings push arrives.
+// Kept here as a defense-in-depth gate on the RELAY side too (see
+// camera-frames-update below) — the renderer already gates capture at the
+// source when this is off, but the overlay must never trust the sender
+// alone to have done that.
+let overlayShowCameraTiles = true
+
 // Named corner anchors, not raw x/y — recomputed against whatever the
 // primary display's current work area is, so this is correct across
 // resolution/monitor changes rather than pinning to a coordinate that may
@@ -478,6 +486,30 @@ ipcMain.on('overlay-settings-update', (_event, settings) => {
       overlayWindow.hide()
     }
   }
+  if (typeof settings?.showCameraTiles === 'boolean' && settings.showCameraTiles !== overlayShowCameraTiles) {
+    overlayShowCameraTiles = settings.showCameraTiles
+    // Clear any tiles already on screen the instant this turns off, rather
+    // than leaving stale frames visible until the next camera-frames-update
+    // tick (which won't come — the renderer stops sending as soon as it
+    // sees the same setting change). Turning it back on doesn't need an
+    // equivalent push here: the renderer's own capture loop naturally
+    // resumes sending real frames on its next tick.
+    if (!overlayShowCameraTiles) {
+      overlayWindow?.webContents.send('camera-frames', [])
+    }
+  }
+})
+
+// Phase 4 — camera tile frames. The renderer (which has the real LiveKit/
+// Agora video elements) captures a low-res JPEG snapshot per camera-sharing
+// participant and pushes the whole set here each tick; we just relay it to
+// the overlay window, same split as voice-state-update. overlayShowCameraTiles
+// is checked again here (defense in depth) even though the renderer already
+// gates its own capture loop on the same setting — the overlay must never
+// depend solely on the sender having done that.
+ipcMain.on('camera-frames-update', (_event, frames) => {
+  if (!overlayShowCameraTiles) return
+  overlayWindow?.webContents.send('camera-frames', Array.isArray(frames) ? frames : [])
 })
 
 function createOverlayWindow() {

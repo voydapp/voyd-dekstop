@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   sendVoiceState: (state) => ipcRenderer.send('voice-state-update', state),
   sendOverlaySettings: (settings) => ipcRenderer.send('overlay-settings-update', settings),
+  sendCameraFrames: (frames) => ipcRenderer.send('camera-frames-update', frames),
 })
 
 // Bridge update-status IPC events to CustomEvents so the web app (App.tsx) can listen
