@@ -57,20 +57,34 @@ autoUpdater.on('download-progress', (progress) => {
 
 let downloadedFilePath = null
 
+// electron-updater doesn't reliably expose the downloaded path via
+// downloadedUpdateHelper, so this is resolved from the known cache location
+// instead. Kept as a function (not resolved once and cached) because it's
+// deliberately re-checked fresh at install time, not just at download time —
+// see the comment in the install-update handler for why.
+function getExpectedDownloadPath() {
+  const cacheDir = path.join(app.getPath('appData').replace('Roaming', 'Local'), 'voyd-dekstop-updater', 'pending')
+  return path.join(cacheDir, 'VOYD.exe')
+}
+
 autoUpdater.on('update-downloaded', (info) => {
   console.log('[updater] update-downloaded', info?.version)
   console.log('[updater] PORTABLE_EXECUTABLE_DIR:', process.env.PORTABLE_EXECUTABLE_DIR)
   console.log('[updater] execPath:', process.execPath)
 
-  // electron-updater doesn't reliably expose the path via downloadedUpdateHelper,
-  // so resolve it ourselves from the known cache location.
-  const cacheDir = path.join(app.getPath('appData').replace('Roaming', 'Local'), 'voyd-dekstop-updater', 'pending')
-  const expectedFile = path.join(cacheDir, `VOYD.exe`)
+  const expectedFile = getExpectedDownloadPath()
   if (fs.existsSync(expectedFile)) {
     downloadedFilePath = expectedFile
     console.log('[updater] downloadedFilePath:', downloadedFilePath)
   } else {
-    console.log('[updater] expected file not found at:', expectedFile)
+    // Real, observed race: electron-updater can fire this event a moment
+    // before the file is fully written/renamed into place, so a miss here
+    // doesn't mean the download failed — install-update re-checks this same
+    // path fresh (by which point the gap has long closed) rather than
+    // trusting this one-shot result and silently falling back to
+    // quitAndInstall(), which doesn't know how to replace a portable exe's
+    // permanent copy at all.
+    console.log('[updater] expected file not found yet at:', expectedFile, '(will re-check at install time)')
   }
 
   mainWindow?.webContents.send('update-status', 'ready')
@@ -116,7 +130,13 @@ ipcMain.on('install-update', () => {
   try { tray?.destroy() } catch(e) {}
   tray = null
 
-  const downloadedFile = downloadedFilePath
+  // Re-check fresh rather than trusting only the snapshot taken when
+  // update-downloaded fired — that check can race electron-updater's own
+  // file write/rename (see comment there). By the time the user has
+  // actually clicked install, the download is long finished either way.
+  const downloadedFile = (downloadedFilePath && fs.existsSync(downloadedFilePath))
+    ? downloadedFilePath
+    : (fs.existsSync(getExpectedDownloadPath()) ? getExpectedDownloadPath() : null)
 
   // Find the directory containing the permanent VOYD.exe the user launched.
   // PORTABLE_EXECUTABLE_DIR often points to the updater cache, so we check
