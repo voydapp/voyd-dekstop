@@ -347,18 +347,94 @@ ipcMain.on('voice-state-update', (_event, state) => {
   overlayWindow?.webContents.send('voice-state', state)
 })
 
-function createOverlayWindow() {
-  const OVERLAY_WIDTH = 280
-  const OVERLAY_HEIGHT = 400
-  const MARGIN = 16
+const OVERLAY_WIDTH = 280
+const OVERLAY_HEIGHT = 400
+const OVERLAY_MARGIN = 16
 
-  const { x: waX, y: waY, width: waWidth } = screen.getPrimaryDisplay().workArea
+// Phase 1 hardcoded defaults — still what's used until the renderer's first
+// overlay-settings-update push arrives (fresh launch before login finishes,
+// or a user_settings row that predates this phase), and what a brand new
+// account with no saved row falls back to.
+let overlayKeybind = 'CommandOrControl+Shift+O'
+let overlayPosition = 'top-right'
+
+// Named corner anchors, not raw x/y — recomputed against whatever the
+// primary display's current work area is, so this is correct across
+// resolution/monitor changes rather than pinning to a coordinate that may
+// not even be on-screen next time.
+function computeOverlayBounds(position) {
+  const { x: waX, y: waY, width: waWidth, height: waHeight } = screen.getPrimaryDisplay().workArea
+  const left = Math.round(waX + OVERLAY_MARGIN)
+  const right = Math.round(waX + waWidth - OVERLAY_WIDTH - OVERLAY_MARGIN)
+  const top = Math.round(waY + OVERLAY_MARGIN)
+  const bottom = Math.round(waY + waHeight - OVERLAY_HEIGHT - OVERLAY_MARGIN)
+
+  switch (position) {
+    case 'top-left': return { x: left, y: top, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT }
+    case 'bottom-left': return { x: left, y: bottom, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT }
+    case 'bottom-right': return { x: right, y: bottom, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT }
+    case 'top-right':
+    default: return { x: right, y: top, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT }
+  }
+}
+
+function repositionOverlayWindow(position) {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  overlayWindow.setBounds(computeOverlayBounds(position))
+}
+
+function toggleOverlayWindow() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  if (overlayWindow.isVisible()) {
+    overlayWindow.hide()
+  } else {
+    // showInactive, not show — the overlay must never steal focus from the game underneath.
+    overlayWindow.showInactive()
+  }
+}
+
+// Re-registerable so a keybind change while the app is running takes effect
+// immediately, no restart. Registers the NEW accelerator before unregistering
+// the old one — if the new one is invalid or already claimed by something
+// else on the OS, globalShortcut.register returns false and the existing
+// binding is left alone rather than leaving the user with no overlay
+// shortcut at all.
+function registerOverlayShortcut(accelerator) {
+  if (accelerator === overlayKeybind && globalShortcut.isRegistered(accelerator)) return true
+
+  const registered = globalShortcut.register(accelerator, toggleOverlayWindow)
+  if (!registered) {
+    console.error('[main] overlay keybind registration failed (invalid or already in use):', accelerator)
+    return false
+  }
+  if (overlayKeybind && overlayKeybind !== accelerator) {
+    globalShortcut.unregister(overlayKeybind)
+  }
+  overlayKeybind = accelerator
+  return true
+}
+
+// Phase 2 — the renderer (which has the Supabase session) reads
+// overlay_keybind/overlay_position from user_settings and pushes them here,
+// same split as voice-state-update: renderer knows state, main process only
+// applies it. Fires on initial load too, so this is also how a fresh
+// install picks up a real user's saved preference instead of staying on the
+// Phase 1 hardcoded defaults forever.
+ipcMain.on('overlay-settings-update', (_event, settings) => {
+  if (settings?.keybind && settings.keybind !== overlayKeybind) {
+    registerOverlayShortcut(settings.keybind)
+  }
+  if (settings?.position && settings.position !== overlayPosition) {
+    overlayPosition = settings.position
+    repositionOverlayWindow(overlayPosition)
+  }
+})
+
+function createOverlayWindow() {
+  const bounds = computeOverlayBounds(overlayPosition)
 
   overlayWindow = new BrowserWindow({
-    width: OVERLAY_WIDTH,
-    height: OVERLAY_HEIGHT,
-    x: Math.round(waX + waWidth - OVERLAY_WIDTH - MARGIN),
-    y: Math.round(waY + MARGIN),
+    ...bounds,
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -645,16 +721,10 @@ app.whenReady().then(() => {
   // Overlay toggle — global so it works while a game window has focus.
   // Confirmed against existing globalShortcut registrations (Shift+M,
   // Shift+D, K, comma, Alt+arrows) before picking Shift+O: no conflict.
-  globalShortcut.register('CommandOrControl+Shift+O', () => {
-    if (!overlayWindow || overlayWindow.isDestroyed()) return
-    if (overlayWindow.isVisible()) {
-      overlayWindow.hide()
-    } else {
-      // showInactive, not show — the overlay must never steal focus from
-      // the game underneath.
-      overlayWindow.showInactive()
-    }
-  })
+  // Registers the Phase 1 default (or whatever overlayKeybind already is);
+  // the renderer's first overlay-settings-update push after login re-applies
+  // the user's actual saved preference on top of this.
+  registerOverlayShortcut(overlayKeybind)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
