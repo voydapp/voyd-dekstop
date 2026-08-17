@@ -1,6 +1,6 @@
 {
   "name": "voyd-desktop",
-  "version": "1.0.80",
+  "version": "1.0.81",
   "description": "VOYD Desktop App",
   "main": "main.js",
   "scripts": {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen, Notification } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs = require('fs')
@@ -8,6 +8,89 @@ const gameDetection = require('./gameDetection')
 let tray = null
 let mainWindow = null
 let overlayWindow = null
+
+// The one canonical permanent install location this app's self-replace step
+// always targets — confirmed Aug 17 by locating the real Desktop shortcut's
+// target before it was deleted, and matching the pre-existing hardcoded
+// fallback already in this file. Checked FIRST (not last) in possibleDirs
+// below specifically so a stray folder that also happens to contain a
+// VOYD.exe (a test copy, an old extraction, anything) can never get
+// self-replaced into a second "real" install instead of this one.
+const CANONICAL_INSTALL_DIR = 'C:\\VOYD'
+
+const UPDATER_CACHE_DIR = path.join(app.getPath('appData').replace('Roaming', 'Local'), 'voyd-dekstop-updater')
+const UPDATE_LOG_PATH = path.join(UPDATER_CACHE_DIR, 'update.log')
+const UPDATE_FAILURE_MARKER_PATH = path.join(UPDATER_CACHE_DIR, 'last-replace-failed.txt')
+
+// Real file-based logging for the self-replace path specifically — console
+// output alone isn't visible during the actual replace moment (the batch
+// script runs after this process has already quit), so a silent failure
+// there leaves nothing to diagnose from. Every step of the update/install
+// flow logs here, not just errors, so a full timeline exists after the fact.
+function logUpdate(message) {
+  try {
+    fs.mkdirSync(UPDATER_CACHE_DIR, { recursive: true })
+    fs.appendFileSync(UPDATE_LOG_PATH, `[${new Date().toISOString()}] ${message}\n`)
+  } catch (e) {
+    console.error('[updater] failed to write update log:', e?.message || e)
+  }
+  console.log('[updater]', message)
+}
+
+// electron-builder's portable NSIS target self-extracts to a fresh
+// ns????.tmp\7z-out folder in %TEMP% on EVERY launch and never cleans them
+// up itself — confirmed Aug 17: 16 of these had accumulated (~214MB each,
+// ~3.4GB total) from testing across two days. Best-effort cleanup on
+// startup, skipping whatever we're actually running from right now.
+function cleanupOrphanedExtractionFolders() {
+  try {
+    const tempDir = app.getPath('temp')
+    const currentDir = path.dirname(process.execPath).toLowerCase()
+    const entries = fs.readdirSync(tempDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^ns[a-z0-9]+\.tmp$/i.test(entry.name)) continue
+      const fullPath = path.join(tempDir, entry.name)
+      if (currentDir.startsWith(fullPath.toLowerCase())) continue // never touch our own running copy
+      try {
+        fs.rmSync(fullPath, { recursive: true, force: true })
+        logUpdate(`cleaned up orphaned extraction folder: ${fullPath}`)
+      } catch (e) {
+        // Still in use by something else, or a permissions hiccup — fine to
+        // skip, it'll either get cleaned up next launch or isn't worth
+        // failing startup over.
+      }
+    }
+  } catch (e) {
+    console.error('[main] orphaned extraction cleanup failed:', e?.message || e)
+  }
+}
+
+// If the batch script's self-replace failed last time, it leaves a marker
+// with why. Without this, a failed update degrades silently back to "user
+// has to manually chase down a new exe" with zero indication anything went
+// wrong — this surfaces it for real, both as an OS notification and as the
+// same update-status channel the in-app UI already listens to.
+function checkForPreviousReplaceFailure() {
+  try {
+    if (!fs.existsSync(UPDATE_FAILURE_MARKER_PATH)) return
+    const reason = fs.readFileSync(UPDATE_FAILURE_MARKER_PATH, 'utf8').trim()
+    fs.unlinkSync(UPDATE_FAILURE_MARKER_PATH)
+    logUpdate('previous self-replace failure detected on startup: ' + reason)
+
+    if (Notification.isSupported()) {
+      new Notification({
+        title: 'VOYD update failed to install',
+        body: reason || 'The last update could not be installed automatically.',
+      }).show()
+    }
+
+    mainWindow?.webContents.once('did-finish-load', () => {
+      mainWindow?.webContents.send('update-status', 'error', { message: reason })
+    })
+  } catch (e) {
+    console.error('[main] failed to check for previous replace failure:', e?.message || e)
+  }
+}
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock()
@@ -36,22 +119,22 @@ autoUpdater.setFeedURL({
 })
 
 autoUpdater.on('checking-for-update', () => {
-  console.log('[updater] checking-for-update')
+  logUpdate('checking-for-update')
   mainWindow?.webContents.send('update-status', 'checking')
 })
 
 autoUpdater.on('update-available', (info) => {
-  console.log('[updater] update-available', info?.version)
+  logUpdate('update-available ' + info?.version)
   mainWindow?.webContents.send('update-status', 'available')
 })
 
 autoUpdater.on('update-not-available', (info) => {
-  console.log('[updater] update-not-available, current is latest:', info?.version)
+  logUpdate('update-not-available, current is latest: ' + info?.version)
   mainWindow?.webContents.send('update-status', 'not-available')
 })
 
 autoUpdater.on('download-progress', (progress) => {
-  console.log('[updater] download-progress', Math.round(progress.percent) + '%')
+  console.log('[updater] download-progress', Math.round(progress.percent) + '%') // too noisy for the persistent log file
   mainWindow?.webContents.send('update-status', 'downloading', { percent: Math.round(progress.percent) })
 })
 
@@ -63,19 +146,16 @@ let downloadedFilePath = null
 // deliberately re-checked fresh at install time, not just at download time —
 // see the comment in the install-update handler for why.
 function getExpectedDownloadPath() {
-  const cacheDir = path.join(app.getPath('appData').replace('Roaming', 'Local'), 'voyd-dekstop-updater', 'pending')
-  return path.join(cacheDir, 'VOYD.exe')
+  return path.join(UPDATER_CACHE_DIR, 'pending', 'VOYD.exe')
 }
 
 autoUpdater.on('update-downloaded', (info) => {
-  console.log('[updater] update-downloaded', info?.version)
-  console.log('[updater] PORTABLE_EXECUTABLE_DIR:', process.env.PORTABLE_EXECUTABLE_DIR)
-  console.log('[updater] execPath:', process.execPath)
+  logUpdate(`update-downloaded ${info?.version} (PORTABLE_EXECUTABLE_DIR=${process.env.PORTABLE_EXECUTABLE_DIR}, execPath=${process.execPath})`)
 
   const expectedFile = getExpectedDownloadPath()
   if (fs.existsSync(expectedFile)) {
     downloadedFilePath = expectedFile
-    console.log('[updater] downloadedFilePath:', downloadedFilePath)
+    logUpdate('downloadedFilePath: ' + downloadedFilePath)
   } else {
     // Real, observed race: electron-updater can fire this event a moment
     // before the file is fully written/renamed into place, so a miss here
@@ -84,14 +164,14 @@ autoUpdater.on('update-downloaded', (info) => {
     // trusting this one-shot result and silently falling back to
     // quitAndInstall(), which doesn't know how to replace a portable exe's
     // permanent copy at all.
-    console.log('[updater] expected file not found yet at:', expectedFile, '(will re-check at install time)')
+    logUpdate('expected file not found yet at: ' + expectedFile + ' (will re-check at install time)')
   }
 
   mainWindow?.webContents.send('update-status', 'ready')
 })
 
 autoUpdater.on('error', (err) => {
-  console.log('[updater] error', err?.message || err)
+  logUpdate('error: ' + (err?.message || err))
   mainWindow?.webContents.send('update-status', 'error', { message: err?.message || 'Update check failed' })
 })
 
@@ -138,45 +218,98 @@ ipcMain.on('install-update', () => {
     ? downloadedFilePath
     : (fs.existsSync(getExpectedDownloadPath()) ? getExpectedDownloadPath() : null)
 
-  // Find the directory containing the permanent VOYD.exe the user launched.
-  // PORTABLE_EXECUTABLE_DIR often points to the updater cache, so we check
-  // multiple candidates and pick the first one that actually has VOYD.exe.
+  // CANONICAL_INSTALL_DIR is checked FIRST, not last — see its comment.
+  // PORTABLE_EXECUTABLE_DIR / INIT_CWD are only consulted as a fallback for
+  // a real install that genuinely isn't at the canonical path.
   const possibleDirs = [
+    CANONICAL_INSTALL_DIR,
     process.env.PORTABLE_EXECUTABLE_DIR,
     path.dirname(process.env.INIT_CWD || ''),
-    'C:\\VOYD'
   ].filter(Boolean)
 
   const targetDir = possibleDirs.find(d => {
     try { return fs.existsSync(path.join(d, 'VOYD.exe')) }
     catch { return false }
-  }) || 'C:\\VOYD'
+  }) || CANONICAL_INSTALL_DIR
 
   const targetExe = path.join(targetDir, 'VOYD.exe')
 
+  logUpdate(`install-update: downloadedFile=${downloadedFile} targetExe=${targetExe}`)
+
   if (downloadedFile && fs.existsSync(downloadedFile)) {
     // Portable build: write a batch script that waits for us to exit,
-    // copies the new exe over the permanent location, then relaunches it.
+    // retries the copy in case the file handle takes a moment to release
+    // even after the process is gone, and relaunches. Every step logs to
+    // UPDATE_LOG_PATH so a silent failure has an actual timeline to
+    // diagnose from afterward instead of just "it didn't work" — the main
+    // process is gone by the time any of this runs, so this file is the
+    // only record that exists.
     const updateScript = path.join(path.dirname(targetExe), 'voyd-update.bat')
+    const logPath = UPDATE_LOG_PATH
+    const failMarkerPath = UPDATE_FAILURE_MARKER_PATH
     fs.writeFileSync(updateScript,
       `@echo off\r\n` +
+      `setlocal enabledelayedexpansion\r\n` +
+      `set LOGFILE="${logPath}"\r\n` +
+      `set FAILMARKER="${failMarkerPath}"\r\n` +
+      `set SRC="${downloadedFile}"\r\n` +
+      `set DST="${targetExe}"\r\n` +
+      `echo [%date% %time%] voyd-update.bat starting, waiting for VOYD.exe to exit >> %LOGFILE%\r\n` +
+      `set /a waitcount=0\r\n` +
       `:waitloop\r\n` +
       `tasklist /fi "imagename eq VOYD.exe" 2>nul | find /i "VOYD.exe" >nul\r\n` +
       `if not errorlevel 1 (\r\n` +
+      `  set /a waitcount+=1\r\n` +
+      `  if !waitcount! GEQ 30 (\r\n` +
+      `    echo [%date% %time%] gave up waiting for VOYD.exe to exit after 30s >> %LOGFILE%\r\n` +
+      `    echo VOYD.exe never fully exited after 30 seconds, update was not installed. > %FAILMARKER%\r\n` +
+      `    goto fail\r\n` +
+      `  )\r\n` +
       `  timeout /t 1 /nobreak >nul\r\n` +
       `  goto waitloop\r\n` +
       `)\r\n` +
-      `copy /y "${downloadedFile}" "${targetExe}"\r\n` +
-      `start "" "${targetExe}"\r\n` +
-      `del "%~f0"\r\n`
+      `echo [%date% %time%] VOYD.exe exited after !waitcount!s, attempting copy >> %LOGFILE%\r\n` +
+      `set /a copyattempt=0\r\n` +
+      `:copyloop\r\n` +
+      `set /a copyattempt+=1\r\n` +
+      `copy /y %SRC% %DST% >nul 2>&1\r\n` +
+      `if errorlevel 1 (\r\n` +
+      `  if !copyattempt! GEQ 5 (\r\n` +
+      `    echo [%date% %time%] copy failed after 5 attempts >> %LOGFILE%\r\n` +
+      `    echo Could not copy the new version into place after 5 attempts ^(file may still have been locked^), update was not installed. > %FAILMARKER%\r\n` +
+      `    goto fail\r\n` +
+      `  )\r\n` +
+      `  echo [%date% %time%] copy attempt !copyattempt! failed, retrying >> %LOGFILE%\r\n` +
+      `  timeout /t 2 /nobreak >nul\r\n` +
+      `  goto copyloop\r\n` +
+      `)\r\n` +
+      `echo [%date% %time%] copy succeeded on attempt !copyattempt! >> %LOGFILE%\r\n` +
+      `if exist %FAILMARKER% del %FAILMARKER%\r\n` +
+      `start "" %DST%\r\n` +
+      `del "%~f0"\r\n` +
+      `exit /b 0\r\n` +
+      `:fail\r\n` +
+      `start "" %DST%\r\n` +
+      `del "%~f0"\r\n` +
+      `exit /b 1\r\n`
     )
+    logUpdate('spawning voyd-update.bat: ' + updateScript)
     require('child_process').spawn('cmd.exe', ['/c', updateScript], {
       detached: true,
       stdio: 'ignore'
     }).unref()
     app.quit()
   } else {
-    // Fallback: let electron-updater handle it (works if PORTABLE_EXECUTABLE_DIR is set)
+    // Fallback: let electron-updater handle it (works if PORTABLE_EXECUTABLE_DIR is set).
+    // This does NOT replace the permanent copy at CANONICAL_INSTALL_DIR — it's
+    // a last resort, not a silent equivalent, so it's logged as such and
+    // leaves a marker the same way a failed batch-copy would, rather than
+    // quietly appearing to have worked.
+    logUpdate('no valid downloadedFile at install time — falling back to autoUpdater.quitAndInstall (does not update ' + targetExe + ')')
+    try {
+      fs.mkdirSync(UPDATER_CACHE_DIR, { recursive: true })
+      fs.writeFileSync(UPDATE_FAILURE_MARKER_PATH, `Automatic update could not confirm the downloaded file — ${targetExe} was not updated. The app relaunched from its update cache instead; it will try again on the next update.`)
+    } catch (e) {}
     BrowserWindow.getAllWindows().forEach(w => w.destroy())
     setTimeout(() => autoUpdater.quitAndInstall(false, true), 500)
   }
@@ -503,9 +636,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  cleanupOrphanedExtractionFolders()
   createTray()
   createWindow()
   createOverlayWindow()
+  checkForPreviousReplaceFailure()
 
   // Overlay toggle — global so it works while a game window has focus.
   // Confirmed against existing globalShortcut registrations (Shift+M,
