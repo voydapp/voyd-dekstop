@@ -358,6 +358,16 @@ const OVERLAY_MARGIN = 16
 let overlayKeybind = 'CommandOrControl+Shift+O'
 let overlayPosition = 'top-right'
 
+// Phase 3 — Streamer Mode. Persisted per-account (user_settings.streamer_mode),
+// pushed here the same way as keybind/position. Scope is overlay-visibility
+// suppression ONLY: it never touches the keybind, position, or anything else.
+// createOverlayWindow() already always creates the window with show:false, so
+// there is nothing extra to do for "starts hidden on launch" today — the
+// actual job of this flag is gating any FUTURE automatic-show call (see
+// autoShowOverlayWindow below) so a later feature can't accidentally defeat
+// Streamer Mode just by forgetting to check it.
+let streamerMode = false
+
 // Named corner anchors, not raw x/y — recomputed against whatever the
 // primary display's current work area is, so this is correct across
 // resolution/monitor changes rather than pinning to a coordinate that may
@@ -383,6 +393,10 @@ function repositionOverlayWindow(position) {
   overlayWindow.setBounds(computeOverlayBounds(position))
 }
 
+// Manual toggle — the keybind. Deliberately bypasses Streamer Mode entirely:
+// per the Phase 3 spec, Streamer Mode only removes AUTOMATIC default
+// visibility, it never disables manual control. A streamer can always bring
+// the overlay up mid-session via this same keybind, Streamer Mode or not.
 function toggleOverlayWindow() {
   if (!overlayWindow || overlayWindow.isDestroyed()) return
   if (overlayWindow.isVisible()) {
@@ -391,6 +405,20 @@ function toggleOverlayWindow() {
     // showInactive, not show — the overlay must never steal focus from the game underneath.
     overlayWindow.showInactive()
   }
+}
+
+// The ONE path any future automatic/conditional overlay-show trigger should
+// call (e.g. a later "show on voice activity" or "show on notification"
+// feature) — never call overlayWindow.showInactive() directly for a
+// non-manual reason. Streamer Mode suppresses it unconditionally; the manual
+// keybind (toggleOverlayWindow above) is the one thing it never touches.
+// No current call site uses this yet (Phase 1/2 never auto-show), but it
+// exists now so Streamer Mode is safe by construction for whatever gets
+// built next, rather than something every future feature has to remember.
+function autoShowOverlayWindow() {
+  if (streamerMode) return
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  overlayWindow.showInactive()
 }
 
 // Re-registerable so a keybind change while the app is running takes effect
@@ -427,6 +455,28 @@ ipcMain.on('overlay-settings-update', (_event, settings) => {
   if (settings?.position && settings.position !== overlayPosition) {
     overlayPosition = settings.position
     repositionOverlayWindow(overlayPosition)
+  }
+  if (typeof settings?.streamerMode === 'boolean' && settings.streamerMode !== streamerMode) {
+    streamerMode = settings.streamerMode
+
+    // Decision: switching Streamer Mode ON force-hides the overlay
+    // immediately if it happens to be visible right now, rather than only
+    // taking effect on the next launch. Streamer Mode is a privacy control —
+    // someone flipping it on almost always means "hide this right now,
+    // I need it off screen this instant" (e.g. they just realized they're
+    // live), not "hide it starting next time I open the app." Waiting for a
+    // restart would leave exactly the content they just asked to suppress
+    // on screen at the one moment it matters most. This mirrors the existing
+    // pattern in this handler: keybind/position changes already apply live,
+    // no restart required.
+    //
+    // Turning it OFF is the mirror case and does NOT force-show anything —
+    // it only lifts the suppression going forward. The overlay stays exactly
+    // as visible/hidden as it already was; the user can always bring it up
+    // with the keybind if they want it.
+    if (streamerMode && overlayWindow && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
+      overlayWindow.hide()
+    }
   }
 })
 
