@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen, Notification } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen, Notification, desktopCapturer } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs = require('fs')
@@ -666,6 +666,27 @@ function createWindow() {
     const allowedPermissions = ['media', 'notifications']
     callback(allowedPermissions.includes(permission))
   })
+
+  // Screen sharing has never worked in this app -- getDisplayMedia() (which
+  // LiveKit's setScreenShareEnabled calls) rejects immediately in Electron
+  // unless a handler is explicitly registered here; setPermissionRequestHandler
+  // above only gates plain getUserMedia (mic/camera), a separate permission
+  // path that was already correctly wired. useSystemPicker delegates to the
+  // real native OS picker (Windows Graphics Capture / macOS ScreenCaptureKit,
+  // which also surfaces the macOS Screen Recording permission prompt itself)
+  // instead of building a custom in-app picker. The desktopCapturer fallback
+  // only runs on the OS versions where the system picker isn't available.
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 0, height: 0 } })
+      .then((sources) => {
+        const fallback = sources.find((s) => s.id.startsWith('screen:')) || sources[0]
+        callback(fallback ? { video: fallback, audio: 'loopback' } : {})
+      })
+      .catch((err) => {
+        console.error('[main] screen share fallback picker failed:', err)
+        callback({})
+      })
+  }, { useSystemPicker: true })
 
   // DevTools toggle — Ctrl+Shift+I toggles open/close (disabled in production)
   if (!app.isPackaged) {
