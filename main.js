@@ -201,7 +201,14 @@ ipcMain.on('show-and-focus-window', () => {
 })
 
 let isInstalling = false
-ipcMain.on('install-update', () => {
+
+// Shared by the manual "click to install" path (header icon, kept for
+// anyone who does notice it) and the automatic before-quit path below --
+// previously only the manual click ever ran this, and almost nobody
+// noticed the icon, so downloaded updates effectively never got applied.
+// Guarded by isInstalling so both callers (and a before-quit re-entry once
+// this function's own app.quit() fires) are safe to call unconditionally.
+function performInstallUpdate() {
   if (isInstalling) return
   isInstalling = true
 
@@ -313,6 +320,36 @@ ipcMain.on('install-update', () => {
     BrowserWindow.getAllWindows().forEach(w => w.destroy())
     setTimeout(() => autoUpdater.quitAndInstall(false, true), 500)
   }
+}
+
+ipcMain.on('install-update', () => {
+  performInstallUpdate()
+})
+
+// Install automatically on the next natural quit instead of requiring the
+// user to notice and click the header icon -- only fires when the user is
+// already quitting (tray "Quit VOYD"), never mid-session: closing the main
+// window alone just hides it to tray (see the window-close IPC handler)
+// and doesn't reach here at all. Quitting already ends any active call
+// regardless of whether an update happens to be staged, so this doesn't
+// introduce a new interruption risk beyond what quitting already means.
+//
+// autoInstallOnAppQuit is deliberately left false -- that's
+// electron-updater's own built-in quit-install mechanism, which doesn't
+// know how to replace this portable build's permanent copy at
+// CANONICAL_INSTALL_DIR (it's the "fallback" branch inside
+// performInstallUpdate above, logged and left as a last resort, not treated
+// as equivalent). The isInstalling guard inside performInstallUpdate makes
+// the app.quit() it calls at the end safe to re-enter this same handler --
+// on that second pass, isInstalling is already true, so it falls through
+// and lets the real quit proceed.
+app.on('before-quit', (event) => {
+  if (isInstalling) return
+  const hasStagedUpdate = (downloadedFilePath && fs.existsSync(downloadedFilePath)) || fs.existsSync(getExpectedDownloadPath())
+  if (!hasStagedUpdate) return
+  logUpdate('before-quit: staged update detected, installing automatically instead of a plain quit')
+  event.preventDefault()
+  performInstallUpdate()
 })
 
 // FIX 4: Version via IPC instead of executeJavaScript
