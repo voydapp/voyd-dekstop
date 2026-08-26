@@ -149,6 +149,34 @@ function getExpectedDownloadPath() {
   return path.join(UPDATER_CACHE_DIR, 'pending', 'VOYD.exe')
 }
 
+// Root-cause fix for a real, observed failure: a second checkForUpdates()
+// call fired (~1 minute into an in-flight install, cause not fully
+// pinned down -- possibly a manual "check for updates" click, possibly a
+// renderer reload) while the FIRST install's batch script was still
+// waiting on the old process to exit. That second check re-downloaded to
+// the same shared pending/VOYD.exe path out from under the first attempt,
+// and the eventual copy failed 5/5 times against a file that had been
+// rewritten mid-flight. Neither call site below previously checked
+// whether an install was already staged or in progress before proceeding.
+//
+// Guards on downloadedFilePath (set only once THIS process's own
+// update-downloaded fires, reset to null on every fresh process start),
+// not on getExpectedDownloadPath()'s file existing on disk -- a stale
+// leftover file from a past failed attempt must NOT permanently block
+// every future check in a brand-new process, only a check racing an
+// install already in flight within the SAME process.
+function canCheckForUpdates() {
+  if (isInstalling) {
+    logUpdate('skipping update check: install already in progress')
+    return false
+  }
+  if (downloadedFilePath) {
+    logUpdate('skipping update check: a downloaded update is already staged and awaiting install')
+    return false
+  }
+  return true
+}
+
 autoUpdater.on('update-downloaded', (info) => {
   logUpdate(`update-downloaded ${info?.version} (PORTABLE_EXECUTABLE_DIR=${process.env.PORTABLE_EXECUTABLE_DIR}, execPath=${process.execPath})`)
 
@@ -251,6 +279,12 @@ function performInstallUpdate() {
     // diagnose from afterward instead of just "it didn't work" — the main
     // process is gone by the time any of this runs, so this file is the
     // only record that exists.
+    //
+    // Uses `ping -n N 127.0.0.1 >nul` for delays, not `timeout /t`, which is
+    // a documented Windows gotcha: timeout tries to read the console input
+    // buffer to let a keypress skip the wait, and can behave unreliably
+    // when run detached/non-interactively (as this script always is) --
+    // ping has no such dependency.
     const updateScript = path.join(path.dirname(targetExe), 'voyd-update.bat')
     const logPath = UPDATE_LOG_PATH
     const failMarkerPath = UPDATE_FAILURE_MARKER_PATH
@@ -272,7 +306,7 @@ function performInstallUpdate() {
       `    echo VOYD.exe never fully exited after 30 seconds, update was not installed. > %FAILMARKER%\r\n` +
       `    goto fail\r\n` +
       `  )\r\n` +
-      `  timeout /t 1 /nobreak >nul\r\n` +
+      `  ping -n 2 127.0.0.1 >nul\r\n` +
       `  goto waitloop\r\n` +
       `)\r\n` +
       `echo [%date% %time%] VOYD.exe exited after !waitcount!s, attempting copy >> %LOGFILE%\r\n` +
@@ -287,7 +321,7 @@ function performInstallUpdate() {
       `    goto fail\r\n` +
       `  )\r\n` +
       `  echo [%date% %time%] copy attempt !copyattempt! failed, retrying >> %LOGFILE%\r\n` +
-      `  timeout /t 2 /nobreak >nul\r\n` +
+      `  ping -n 3 127.0.0.1 >nul\r\n` +
       `  goto copyloop\r\n` +
       `)\r\n` +
       `echo [%date% %time%] copy succeeded on attempt !copyattempt! >> %LOGFILE%\r\n` +
@@ -301,9 +335,15 @@ function performInstallUpdate() {
       `exit /b 1\r\n`
     )
     logUpdate('spawning voyd-update.bat: ' + updateScript)
+    // windowsHide is the actual flag that suppresses the console window --
+    // stdio:'ignore' only detaches the child's own stdio streams, it does
+    // NOT stop Windows from allocating a visible console for cmd.exe.
+    // Without this, every install (manual click or automatic on quit)
+    // flashed a visible "find /i VOYD.exe" terminal window at the user.
     require('child_process').spawn('cmd.exe', ['/c', updateScript], {
       detached: true,
-      stdio: 'ignore'
+      stdio: 'ignore',
+      windowsHide: true
     }).unref()
     app.quit()
   } else {
@@ -362,6 +402,7 @@ ipcMain.handle('get-portable-dir', () => ({
 
 // Manual update check from renderer
 ipcMain.on('check-for-updates', () => {
+  if (!canCheckForUpdates()) return
   autoUpdater.checkForUpdates()
 })
 
@@ -846,6 +887,7 @@ function createWindow() {
   // Check for updates after load
   mainWindow.webContents.once('did-finish-load', () => {
     setTimeout(() => {
+      if (!canCheckForUpdates()) return
       autoUpdater.checkForUpdatesAndNotify()
     }, 5000)
   })
