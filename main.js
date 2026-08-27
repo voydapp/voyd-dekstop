@@ -709,6 +709,21 @@ function createWindow() {
     reloadIfNotLooping('renderer process gone: ' + details.reason)
   })
 
+  // Packaged builds have DevTools disabled entirely (see the toggle below),
+  // so renderer-side console.error/warn (e.g. VoiceContext's screen-share
+  // error logging) is otherwise completely invisible -- there is no other
+  // way to see it. Routed into the same durable log file the updater uses
+  // rather than a separate one, since the tooling to read it already
+  // exists. level: 0=verbose,1=info,2=warning,3=error, per this Electron
+  // version's own MessageDetails type (checked directly against
+  // node_modules/electron/electron.d.ts, not assumed) -- only capturing
+  // warning/error so routine app chatter doesn't drown it out.
+  mainWindow.webContents.on('console-message', (_event, details) => {
+    if (details.level >= 2) {
+      logUpdate(`[renderer console] ${details.message} (${details.sourceUrl}:${details.lineNumber})`)
+    }
+  })
+
   mainWindow.webContents.on('unresponsive', () => {
     reloadIfNotLooping('renderer unresponsive')
   })
@@ -749,19 +764,35 @@ function createWindow() {
   // LiveKit's setScreenShareEnabled calls) rejects immediately in Electron
   // unless a handler is explicitly registered here; setPermissionRequestHandler
   // above only gates plain getUserMedia (mic/camera), a separate permission
-  // path that was already correctly wired. useSystemPicker delegates to the
-  // real native OS picker (Windows Graphics Capture / macOS ScreenCaptureKit,
-  // which also surfaces the macOS Screen Recording permission prompt itself)
-  // instead of building a custom in-app picker. The desktopCapturer fallback
-  // only runs on the OS versions where the system picker isn't available.
-  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+  // path that was already correctly wired.
+  //
+  // CORRECTION (previous comment here was wrong): useSystemPicker is
+  // documented as macOS 15+ only and experimental -- verified directly
+  // against Electron's docs, not assumed. It does NOT delegate to Windows'
+  // Graphics Capture picker or anything else on Windows; on this platform
+  // it's simply a no-op and the handler below always runs. Left enabled
+  // since it's harmless and correct for future macOS support, but on
+  // Windows this callback is genuinely always what runs, not a fallback
+  // path for an edge case.
+  //
+  // Because of that, this always auto-picks the first available screen
+  // with NO user choice of window/screen on Windows -- a real UX gap, not
+  // just a "rare fallback", worth a proper source-picker UI at some point.
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    logUpdate(`[screenshare] handler invoked, videoRequested=${request?.videoRequested} audioRequested=${request?.audioRequested}`)
     desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 0, height: 0 } })
       .then((sources) => {
+        logUpdate(`[screenshare] desktopCapturer found ${sources.length} source(s): ${sources.map((s) => s.id).join(', ')}`)
         const fallback = sources.find((s) => s.id.startsWith('screen:')) || sources[0]
+        if (!fallback) {
+          logUpdate('[screenshare] no sources available at all -- calling back with empty streams')
+        } else {
+          logUpdate(`[screenshare] picking source: ${fallback.id} (${fallback.name})`)
+        }
         callback(fallback ? { video: fallback, audio: 'loopback' } : {})
       })
       .catch((err) => {
-        console.error('[main] screen share fallback picker failed:', err)
+        logUpdate(`[screenshare] desktopCapturer.getSources failed: ${err?.message || err}`)
         callback({})
       })
   }, { useSystemPicker: true })

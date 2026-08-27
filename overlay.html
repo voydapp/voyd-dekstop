@@ -38,7 +38,11 @@
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    /* contain, not cover -- the renderer-side canvas capture now already
+       letterboxes each frame to this tile's exact aspect ratio (see
+       useOverlayCameraSync.ts), so this is defense-in-depth against ever
+       cropping an already-correct frame, not the primary fix. */
+    object-fit: contain;
   }
   .cam-label {
     position: absolute;
