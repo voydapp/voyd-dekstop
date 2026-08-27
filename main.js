@@ -299,6 +299,7 @@ function performInstallUpdate() {
     // when run detached/non-interactively (as this script always is) --
     // ping has no such dependency.
     const updateScript = path.join(path.dirname(targetExe), 'voyd-update.bat')
+    const vbsLauncher = path.join(path.dirname(targetExe), 'voyd-update-launcher.vbs')
     const logPath = UPDATE_LOG_PATH
     const failMarkerPath = UPDATE_FAILURE_MARKER_PATH
     fs.writeFileSync(updateScript,
@@ -308,6 +309,7 @@ function performInstallUpdate() {
       `set FAILMARKER="${failMarkerPath}"\r\n` +
       `set SRC="${downloadedFile}"\r\n` +
       `set DST="${targetExe}"\r\n` +
+      `set VBS="${vbsLauncher}"\r\n` +
       `echo [%date% %time%] voyd-update.bat starting, waiting for VOYD.exe to exit >> %LOGFILE%\r\n` +
       `set /a waitcount=0\r\n` +
       `:waitloop\r\n` +
@@ -342,20 +344,30 @@ function performInstallUpdate() {
       `del %SRC% >nul 2>&1\r\n` +
       `echo [%date% %time%] removed staged pending file >> %LOGFILE%\r\n` +
       `start "" %DST%\r\n` +
+      `if exist %VBS% del %VBS%\r\n` +
       `del "%~f0"\r\n` +
       `exit /b 0\r\n` +
       `:fail\r\n` +
       `start "" %DST%\r\n` +
+      `if exist %VBS% del %VBS%\r\n` +
       `del "%~f0"\r\n` +
       `exit /b 1\r\n`
     )
-    logUpdate('spawning voyd-update.bat: ' + updateScript)
-    // windowsHide is the actual flag that suppresses the console window --
-    // stdio:'ignore' only detaches the child's own stdio streams, it does
-    // NOT stop Windows from allocating a visible console for cmd.exe.
-    // Without this, every install (manual click or automatic on quit)
-    // flashed a visible "find /i VOYD.exe" terminal window at the user.
-    require('child_process').spawn('cmd.exe', ['/c', updateScript], {
+    // windowsHide on the outer spawn only hides THIS process's own window --
+    // it does nothing about the console windows cmd.exe's own children
+    // (tasklist, find, ping, copy) can independently flash, which is a
+    // documented Windows/Node limitation, not something windowsHide can
+    // reach into a batch script and fix. A VBScript wrapper using
+    // WScript.Shell.Run(..., 0, False) is the standard, reliable way to
+    // launch a batch file with its entire process tree genuinely hidden --
+    // every child process a hidden-window cmd.exe spawns shares that same
+    // hidden console rather than opening a new visible one of its own.
+    fs.writeFileSync(vbsLauncher,
+      `Set objShell = CreateObject("WScript.Shell")\r\n` +
+      `objShell.Run Chr(34) & "${updateScript}" & Chr(34), 0, False\r\n`
+    )
+    logUpdate('spawning voyd-update.bat via hidden VBScript launcher: ' + vbsLauncher)
+    require('child_process').spawn('wscript.exe', [vbsLauncher], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true
