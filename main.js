@@ -339,6 +339,8 @@ function performInstallUpdate() {
       `)\r\n` +
       `echo [%date% %time%] copy succeeded on attempt !copyattempt! >> %LOGFILE%\r\n` +
       `if exist %FAILMARKER% del %FAILMARKER%\r\n` +
+      `del %SRC% >nul 2>&1\r\n` +
+      `echo [%date% %time%] removed staged pending file >> %LOGFILE%\r\n` +
       `start "" %DST%\r\n` +
       `del "%~f0"\r\n` +
       `exit /b 0\r\n` +
@@ -623,10 +625,10 @@ function createOverlayWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'overlay-preload.js'),
-      // Own in-memory session, deliberately not the app's default session —
-      // keeps it out of reach of the CSP/permission overrides below, which
-      // are scoped to session.defaultSession and target joinvoyd.com, not
-      // this window's local static content.
+      // Own in-memory session, deliberately not mainWindow's 'persist:voyd'
+      // session — keeps it out of reach of the CSP/permission/display-media
+      // overrides below, which are scoped to that partition and target
+      // joinvoyd.com, not this window's local static content.
       partition: 'overlay-window',
     },
   })
@@ -762,7 +764,18 @@ function createWindow() {
     "worker-src 'self' blob:"
   ].join('; ')
 
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+  // Real bug fixed here: mainWindow's webPreferences.partition ('persist:voyd')
+  // makes it use a session.fromPartition() instance, NOT session.defaultSession --
+  // these are separate Session objects in Electron. Every handler below was
+  // previously registered on session.defaultSession, which mainWindow's actual
+  // webContents never touches, so none of them ever fired for this window. This
+  // was the real, confirmed (zero [screenshare] log lines ever, across every
+  // real attempt) root cause of screen sharing's NotSupportedError -- registering
+  // a display-media handler on the wrong session is equivalent to not
+  // registering one at all.
+  const voydSession = session.fromPartition('persist:voyd')
+
+  voydSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = details.responseHeaders || {}
     // Always override server CSP with our hardcoded policy
     const filtered = Object.fromEntries(
@@ -777,7 +790,7 @@ function createWindow() {
   })
 
   // FIX 10: Restrict permissions to only what VOYD needs
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+  voydSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     const allowedPermissions = ['media', 'notifications']
     callback(allowedPermissions.includes(permission))
   })
@@ -800,7 +813,7 @@ function createWindow() {
   // Because of that, this always auto-picks the first available screen
   // with NO user choice of window/screen on Windows -- a real UX gap, not
   // just a "rare fallback", worth a proper source-picker UI at some point.
-  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+  voydSession.setDisplayMediaRequestHandler((request, callback) => {
     logUpdate(`[screenshare] handler invoked, videoRequested=${request?.videoRequested} audioRequested=${request?.audioRequested}`)
     desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 0, height: 0 } })
       .then((sources) => {
