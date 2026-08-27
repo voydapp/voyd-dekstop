@@ -767,10 +767,20 @@ function createWindow() {
   const VOYD_CSP = [
     "default-src 'self' https://joinvoyd.com https://*.joinvoyd.com",
     "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com",
-    "connect-src 'self' https://joinvoyd.com https://*.joinvoyd.com https://*.supabase.co wss://*.supabase.co wss://fjvijrbfbzdjsyiwqwfd.supabase.co https://*.agora.io wss://*.agora.io https://livekit.io wss://*.livekit.io",
+    // connect-src previously allowed https://*.joinvoyd.com but never the wss:
+    // scheme for that same wildcard -- CSP schemes are matched independently,
+    // so a wildcard covering the https: version of a domain does NOT also
+    // cover wss: to it. VOYD self-hosts LiveKit at voice.joinvoyd.com (a
+    // subdomain, not the *.agora.io/*.livekit.io third-party hosts already
+    // listed below), which was a real, total block on voice chat.
+    "connect-src 'self' https://joinvoyd.com https://*.joinvoyd.com wss://*.joinvoyd.com https://*.supabase.co wss://*.supabase.co wss://fjvijrbfbzdjsyiwqwfd.supabase.co https://*.agora.io wss://*.agora.io https://livekit.io wss://*.livekit.io",
     "img-src 'self' data: blob: https:",
     "media-src 'self' blob: https:",
-    "style-src 'self' 'unsafe-inline' https://joinvoyd.com https://*.joinvoyd.com",
+    // style-src is a strict allowlist (unlike font-src/img-src below, which
+    // already allow broad https:), so Google Fonts' stylesheet host needs an
+    // explicit entry -- font-src's existing https: wildcard already covers
+    // the actual font files from fonts.gstatic.com, so no change needed there.
+    "style-src 'self' 'unsafe-inline' https://joinvoyd.com https://*.joinvoyd.com https://fonts.googleapis.com",
     "font-src 'self' data: https:",
     "frame-src 'self' https:",
     "worker-src 'self' blob:"
