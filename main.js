@@ -37,6 +37,16 @@ function logUpdate(message) {
   console.log('[updater]', message)
 }
 
+// Real, observed gap: an uncaught exception (e.g. tonight's "Object has
+// been destroyed" crash calling a method on an already-closed mainWindow)
+// previously only surfaced as an OS-level Electron error dialog, with
+// nothing written to any log this project actually has tooling to read.
+// Registered as early as possible so it also catches anything thrown
+// during startup, not just once the window is up.
+process.on('uncaughtException', (err) => {
+  logUpdate('[uncaughtException] ' + (err?.stack || err?.message || err))
+})
+
 // electron-builder's portable NSIS target self-extracts to a fresh
 // ns????.tmp\7z-out folder in %TEMP% on EVERY launch and never cleans them
 // up itself — confirmed Aug 17: 16 of these had accumulated (~214MB each,
@@ -98,7 +108,10 @@ if (!gotTheLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
+    // isDestroyed() check is defense-in-depth on top of the real fix
+    // (mainWindow now gets reset to null on 'closed') -- belt and braces
+    // against any other path that could still leave a stale reference.
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.show()
       mainWindow.focus()
@@ -687,6 +700,15 @@ function createWindow() {
   })
 
   mainWindow.loadURL('https://joinvoyd.com/app')
+
+  // Real crash fixed here: mainWindow was never reset to null when the
+  // window closed (unlike overlayWindow, which already does this), so any
+  // later code touching the stale reference -- e.g. second-instance below --
+  // could throw "Object has been destroyed" calling a method on an already-
+  // destroyed native window, an uncaught exception that crashed the whole
+  // main process with no window ever opening. Every mainWindow?.foo call
+  // elsewhere in this file becomes a safe no-op once this actually runs.
+  mainWindow.on('closed', () => { mainWindow = null })
 
   // Notifications (and everything else) live entirely in the renderer's own
   // Realtime subscription — if it crashes or hangs, reload rather than sitting
