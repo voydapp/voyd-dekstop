@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen, Notification, desktopCapturer } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen, Notification, desktopCapturer, dialog } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs = require('fs')
@@ -433,6 +433,114 @@ ipcMain.on('check-for-updates', () => {
   autoUpdater.checkForUpdates()
 })
 
+// Web build version check -- separate from the app-itself autoUpdater above.
+// mainWindow always loads https://joinvoyd.com/app live (this desktop app
+// never bundles web assets), so a Coolify deploy to that site is invisible
+// to electron-updater entirely -- it only knows about new *desktop app*
+// releases. Real, observed bug: the custom window-close handler just hides
+// to tray instead of quitting, and requestSingleInstanceLock means
+// re-opening the icon/tray just shows the same already-running window
+// rather than starting fresh -- none of those re-show paths ever reload,
+// so the renderer can keep running JS from long before the latest web
+// deploy indefinitely. There's no push signal for a web deploy, so this
+// polls for the one thing already used tonight to hand-confirm a deploy had
+// gone live: the content-hashed bundle filename in /app's HTML (e.g.
+// /assets/index-FbTKZLVi.js) -- a changed hash means new JS is live that
+// this renderer has not loaded.
+const VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000 // not latency sensitive -- no reason to poll more often than this
+
+let knownBundleHash = null   // the hash this renderer actually has loaded (the "known good" baseline)
+let lastPromptedHash = null  // last hash already prompted about -- kept separate from knownBundleHash so picking "Later" doesn't re-nag every single poll for the same deploy, only on the NEXT distinct hash change
+let versionCheckStarted = false
+let lastVoiceState = null    // see isInVoiceCall() below
+
+// Plain global fetch (Electron 40's bundled Node has it built in), not
+// routed through voydSession/'persist:voyd' the way mainWindow's own
+// requests are -- that partition's cookie jar and the CSP override
+// registered on it further down are both scoped to mainWindow's
+// webContents, not to this process's own fetch calls, so neither applies
+// or matters here. All that's needed is the same public, unauthenticated
+// /app HTML a plain browser would get, just to read the bundle filename
+// out of it.
+async function fetchLiveBundleHash() {
+  try {
+    const res = await fetch('https://joinvoyd.com/app')
+    if (!res.ok) {
+      logUpdate(`[version-check] fetch returned HTTP ${res.status}`)
+      return null
+    }
+    const html = await res.text()
+    const match = html.match(/\/assets\/index-[^"]+\.js/)
+    return match ? match[0] : null
+  } catch (e) {
+    // Network hiccup / transient DNS issue -- just try again next interval,
+    // this must never throw unhandled or take down the main process.
+    logUpdate('[version-check] fetch failed: ' + (e?.message || e))
+    return null
+  }
+}
+
+// The one existing signal in this process for "a call is active right now":
+// the renderer's VoiceContext already pushes its own voice state here (see
+// voice-state-update below) purely to relay to the overlay window, and sets
+// channelName back to null when the user leaves. Reused as-is rather than
+// adding any new renderer->main IPC just for this dialog.
+function isInVoiceCall() {
+  return !!lastVoiceState?.channelName
+}
+
+async function checkForNewWebBuild() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  const hash = await fetchLiveBundleHash()
+  if (!hash) return
+
+  if (!knownBundleHash) {
+    // Baseline wasn't established yet (e.g. the initial fetch on load
+    // failed) -- establish it now rather than comparing against nothing.
+    knownBundleHash = hash
+    logUpdate('[version-check] baseline bundle hash established: ' + hash)
+    return
+  }
+
+  if (hash === knownBundleHash) return
+  if (hash === lastPromptedHash) return // already asked about this exact deploy -- don't nag every poll
+
+  if (isInVoiceCall()) {
+    logUpdate('[version-check] new build detected but deferring prompt -- voice call in progress')
+    return
+  }
+
+  lastPromptedHash = hash
+  logUpdate(`[version-check] new build detected (${knownBundleHash} -> ${hash}), prompting user`)
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    buttons: ['Reload Now', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Update available',
+    message: 'A new version of VOYD is available.',
+    detail: 'Reload now to get the latest version, or keep working and reload later.',
+  })
+
+  if (response === 0) {
+    logUpdate('[version-check] user chose Reload Now -- reloading')
+    knownBundleHash = hash
+    mainWindow.webContents.reload()
+  } else {
+    logUpdate('[version-check] user chose Later -- will not re-prompt until the next distinct hash change')
+  }
+}
+
+function startVersionCheckPolling() {
+  if (versionCheckStarted) return
+  versionCheckStarted = true
+  setInterval(() => {
+    checkForNewWebBuild().catch((e) => logUpdate('[version-check] unexpected error: ' + (e?.message || e)))
+  }, VERSION_CHECK_INTERVAL_MS)
+}
+
 // Rich Presence — process detection. The renderer (web app) controls on/off
 // via show_activity_status; confirmed detections/clears are relayed back to
 // it, which writes through the presence table the same way manual_status does.
@@ -449,6 +557,7 @@ ipcMain.on('set-activity-detection-enabled', (_event, enabled) => {
 // window, which has no Supabase session of its own (same split as Rich
 // Presence: renderer knows state, main process only routes it).
 ipcMain.on('voice-state-update', (_event, state) => {
+  lastVoiceState = state // also used by isInVoiceCall() to defer the web-build reload prompt during a call
   overlayWindow?.webContents.send('voice-state', state)
 })
 
@@ -669,6 +778,13 @@ function createTray() {
         mainWindow?.show()
         mainWindow?.focus()
       }
+    },
+    {
+      // Manual fallback the user can always reach regardless of the
+      // periodic web-build version check above -- e.g. if the poll hasn't
+      // fired yet, or a call is deferring its prompt.
+      label: 'Reload',
+      click: () => mainWindow?.webContents.reload()
     },
     { type: 'separator' },
     {
@@ -978,6 +1094,21 @@ function createWindow() {
       if (!canCheckForUpdates()) return
       autoUpdater.checkForUpdatesAndNotify()
     }, 5000)
+
+    // Establish the web-build "known good" bundle hash baseline right after
+    // the first successful load -- see the Web build version check section
+    // above. Re-fetched fresh via Node rather than trusting anything read
+    // out of this webContents directly, so the baseline reflects the actual
+    // HTTP response, not whatever the renderer happens to believe.
+    fetchLiveBundleHash().then((hash) => {
+      if (hash) {
+        knownBundleHash = hash
+        logUpdate('[version-check] baseline bundle hash: ' + hash)
+      } else {
+        logUpdate('[version-check] could not establish baseline bundle hash on startup -- will retry on next poll')
+      }
+      startVersionCheckPolling()
+    })
   })
 }
 
