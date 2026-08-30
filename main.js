@@ -882,14 +882,26 @@ function createWindow() {
 
   const VOYD_CSP = [
     "default-src 'self' https://joinvoyd.com https://*.joinvoyd.com",
-    "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com",
+    // https://www.gstatic.com is required here (not just connect-src) because
+    // /firebase-messaging-sw.js runs importScripts() against two gstatic.com
+    // URLs -- importScripts inside a service worker is governed by script-src,
+    // not worker-src (worker-src only gates the SW's own registration URL,
+    // which is same-origin). Without this, this session's own CSP override
+    // silently blocked those imports, throwing inside the SW's top-level
+    // script and surfacing as "ServiceWorker script evaluation failed" --
+    // invisible to a plain curl/browser check since nginx sends no CSP at all;
+    // this session-level override is Electron-only.
+    "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://www.gstatic.com",
     // connect-src previously allowed https://*.joinvoyd.com but never the wss:
     // scheme for that same wildcard -- CSP schemes are matched independently,
     // so a wildcard covering the https: version of a domain does NOT also
     // cover wss: to it. VOYD self-hosts LiveKit at voice.joinvoyd.com (a
     // subdomain, not the *.agora.io/*.livekit.io third-party hosts already
     // listed below), which was a real, total block on voice chat.
-    "connect-src 'self' https://joinvoyd.com https://*.joinvoyd.com wss://*.joinvoyd.com https://*.supabase.co wss://*.supabase.co wss://fjvijrbfbzdjsyiwqwfd.supabase.co https://*.agora.io wss://*.agora.io https://livekit.io wss://*.livekit.io",
+    // firebaseinstallations/fcmregistrations are the two Google endpoints
+    // firebase/messaging's getToken() itself fetches -- needed once SW
+    // registration succeeds, or getToken() fails next with its own CSP block.
+    "connect-src 'self' https://joinvoyd.com https://*.joinvoyd.com wss://*.joinvoyd.com https://*.supabase.co wss://*.supabase.co wss://fjvijrbfbzdjsyiwqwfd.supabase.co https://*.agora.io wss://*.agora.io https://livekit.io wss://*.livekit.io https://firebaseinstallations.googleapis.com https://fcmregistrations.googleapis.com",
     "img-src 'self' data: blob: https:",
     "media-src 'self' blob: https:",
     // style-src is a strict allowlist (unlike font-src/img-src below, which
