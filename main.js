@@ -4,6 +4,28 @@ const path = require('path')
 const fs = require('fs')
 const { execSync } = require('child_process')
 const gameDetection = require('./gameDetection')
+const { setup: setupPushReceiver } = require('@superhuman/electron-push-receiver')
+
+// Minimal inline .env loader (KEY=VALUE per line, '#' comments, blank lines
+// skipped) -- avoids an extra dependency for what's only ever two values.
+// Never overwrites a var already set some other way.
+function loadEnvFile(filePath) {
+  let contents
+  try {
+    contents = fs.readFileSync(filePath, 'utf8')
+  } catch {
+    logUpdate(`no .env found at ${filePath} -- GOOGLE_DEFAULT_CLIENT_ID/SECRET unset, push registration will fail until it's created`)
+    return
+  }
+  for (const line of contents.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eq = trimmed.indexOf('=')
+    if (eq === -1) continue
+    const key = trimmed.slice(0, eq).trim()
+    if (!(key in process.env)) process.env[key] = trimmed.slice(eq + 1).trim()
+  }
+}
 
 let tray = null
 let mainWindow = null
@@ -850,6 +872,13 @@ function createWindow() {
     frame: false,
   })
 
+  // Must be registered before the renderer's START_NOTIFICATION_SERVICE send
+  // (on did-finish-load) -- electron-push-receiver implements FCM's own
+  // registration/MCS protocol directly over Node, since Electron's Chromium
+  // build has no Push API/PushManager (getToken()'s pushManager.subscribe()
+  // always throws AbortError there, confirmed via electron/electron#6697).
+  setupPushReceiver(mainWindow.webContents)
+
   mainWindow.loadURL('https://joinvoyd.com/app')
 
   // Real crash fixed here: mainWindow was never reset to null when the
@@ -1154,24 +1183,23 @@ function createWindow() {
   })
 }
 
-// Required by Electron for the Push API (what firebase/messaging's getToken()
-// uses under the hood via PushManager.subscribe()) to work at all -- stock
-// Chrome ships with Google API keys baked in for this; Electron's Chromium
-// does not, so without these, subscribe() reaches Google's push service and
-// gets rejected with "AbortError: Registration failed - push service not
-// available" regardless of anything else being correct (confirmed: this repo
-// had none of the three set anywhere). Must be set before app.whenReady().
-// GOOGLE_API_KEY reuses this app's own Firebase Web API key (src/lib/firebase.ts
-// -- already public in the client bundle, same GCP project, not a new secret).
-// GOOGLE_DEFAULT_CLIENT_ID/SECRET are a separate, still-missing requirement:
-// an OAuth 2.0 Client ID of type "Desktop app", created in Google Cloud
-// Console under the voydapp-dddc9 project (APIs & Services > Credentials).
-// That's an account-holder setup step, not something derivable from existing
-// code -- until it's created and these two are filled in, push registration
-// will still fail with the same AbortError even with the API key set.
+// GOOGLE_API_KEY/GOOGLE_DEFAULT_CLIENT_ID/GOOGLE_DEFAULT_CLIENT_SECRET are Chromium
+// env vars for its own Google integrations (sync, Safe Browsing, etc.) -- NOT what
+// fixes push notifications. Electron's Chromium build has no Push API/PushManager
+// implementation at all (confirmed via electron/electron#6697), so setting these
+// alone can never make pushManager.subscribe() work; real push registration uses
+// electron-push-receiver's own GCM/MCS client instead (see setupPushReceiver above).
+// Kept set for Chromium's own benefit, harmless either way. GOOGLE_API_KEY reuses
+// this app's own Firebase Web API key (src/lib/firebase.ts -- already public in the
+// client bundle, same GCP project, not a new secret) so it's fine as a literal here.
+// GOOGLE_DEFAULT_CLIENT_ID/SECRET come from a "Desktop app"-type OAuth 2.0 Client ID
+// (Google Cloud Console, voydapp-dddc9 project) -- loaded from a git-ignored local
+// .env instead of committed as literals: GitHub's push protection blocked the
+// commit that had them inline, and while Google doesn't treat this client type's
+// secret as confidential (RFC 8252 installed-app flow), keeping it out of git
+// history avoids relying on every future contributor knowing that distinction.
 process.env.GOOGLE_API_KEY = 'AIzaSyAuA2k4R0oDeJmTe45LhWgOdKlEY8pq9Fw'
-// process.env.GOOGLE_DEFAULT_CLIENT_ID = ''
-// process.env.GOOGLE_DEFAULT_CLIENT_SECRET = ''
+loadEnvFile(path.join(__dirname, '.env'))
 
 app.whenReady().then(() => {
   cleanupOrphanedExtractionFolders()

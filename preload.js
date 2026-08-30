@@ -1,5 +1,16 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+// Hardcoded rather than required from '@superhuman/electron-push-receiver/src/constants':
+// this sandboxed preload script can only require Electron's own built-ins, not arbitrary
+// npm packages -- requiring that path threw and silently killed this entire preload script
+// (confirmed live: window.electronAPI never got defined, breaking drag/minimize/etc. too,
+// not just push). Must stay in sync with the package's src/constants/index.js values.
+const START_NOTIFICATION_SERVICE = 'PUSH_RECEIVER:::START_NOTIFICATION_SERVICE'
+const NOTIFICATION_SERVICE_STARTED = 'PUSH_RECEIVER:::NOTIFICATION_SERVICE_STARTED'
+const NOTIFICATION_SERVICE_ERROR = 'PUSH_RECEIVER:::NOTIFICATION_SERVICE_ERROR'
+const NOTIFICATION_RECEIVED = 'PUSH_RECEIVER:::NOTIFICATION_RECEIVED'
+const TOKEN_UPDATED = 'PUSH_RECEIVER:::TOKEN_UPDATED'
+
 contextBridge.exposeInMainWorld('electronAPI', {
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
@@ -21,6 +32,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendVoiceState: (state) => ipcRenderer.send('voice-state-update', state),
   sendOverlaySettings: (settings) => ipcRenderer.send('overlay-settings-update', settings),
   sendCameraFrames: (frames) => ipcRenderer.send('camera-frames-update', frames),
+  startPushNotificationService: (config) => ipcRenderer.send(START_NOTIFICATION_SERVICE, config),
+  onPushServiceStarted: (callback) => {
+    ipcRenderer.on(NOTIFICATION_SERVICE_STARTED, (_event, token) => callback(token))
+  },
+  onPushServiceError: (callback) => {
+    ipcRenderer.on(NOTIFICATION_SERVICE_ERROR, (_event, error) => callback(error))
+  },
+  onPushTokenUpdated: (callback) => {
+    ipcRenderer.on(TOKEN_UPDATED, (_event, token) => callback(token))
+  },
+  onPushNotificationReceived: (callback) => {
+    ipcRenderer.on(NOTIFICATION_RECEIVED, (_event, notification) => callback(notification))
+  },
 })
 
 // Bridge update-status IPC events to CustomEvents so the web app (App.tsx) can listen
