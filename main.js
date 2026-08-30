@@ -489,8 +489,23 @@ function isInVoiceCall() {
   return !!lastVoiceState?.channelName
 }
 
+// Guards the dialog itself, not just the hash bookkeeping. Without this, a
+// dialog left open across a poll boundary (10 min is easily longer than a
+// user takes to notice a background window) let a second, later poll open a
+// SECOND dialog.showMessageBox on the same mainWindow. Windows stacks those
+// silently -- the older one keeps waiting on its own unresolved promise
+// underneath the newer one. Clicking "Reload Now" on the dialog actually
+// visible only ever resolves the top one; the other stays pending and pops
+// back up the moment the first is dismissed, which matches the reported
+// "dialog keeps recurring and Reload Now does nothing." Found by code
+// inspection (no re-entrancy guard existed anywhere on this path) -- not
+// independently reproduced live, since the actual bug requires two genuine
+// production hash changes spanning a >10min gap with the dialog left open.
+let updatePromptOpen = false
+
 async function checkForNewWebBuild() {
   if (!mainWindow || mainWindow.isDestroyed()) return
+  if (updatePromptOpen) return
 
   const hash = await fetchLiveBundleHash()
   if (!hash) return
@@ -514,15 +529,21 @@ async function checkForNewWebBuild() {
   lastPromptedHash = hash
   logUpdate(`[version-check] new build detected (${knownBundleHash} -> ${hash}), prompting user`)
 
-  const { response } = await dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    buttons: ['Reload Now', 'Later'],
-    defaultId: 0,
-    cancelId: 1,
-    title: 'Update available',
-    message: 'A new version of VOYD is available.',
-    detail: 'Reload now to get the latest version, or keep working and reload later.',
-  })
+  updatePromptOpen = true
+  let response
+  try {
+    ;({ response } = await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      buttons: ['Reload Now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update available',
+      message: 'A new version of VOYD is available.',
+      detail: 'Reload now to get the latest version, or keep working and reload later.',
+    }))
+  } finally {
+    updatePromptOpen = false
+  }
 
   if (response === 0) {
     logUpdate('[version-check] user chose Reload Now -- reloading')
