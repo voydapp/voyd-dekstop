@@ -912,7 +912,12 @@ function createWindow() {
     // script and surfacing as "ServiceWorker script evaluation failed" --
     // invisible to a plain curl/browser check since nginx sends no CSP at all;
     // this session-level override is Electron-only.
-    "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://www.gstatic.com",
+    // cdn.jsdelivr.net is @livekit/track-processors' background-blur path:
+    // BackgroundTransformer.init() loads @mediapipe/tasks-vision's wasm
+    // loader script from there (FilesetResolver.forVisionTasks) -- without
+    // it, that load is blocked outright and blur fails immediately, before
+    // any model/segmentation code runs.
+    "script-src 'self' https://joinvoyd.com https://*.joinvoyd.com 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://www.gstatic.com https://cdn.jsdelivr.net",
     // connect-src previously allowed https://*.joinvoyd.com but never the wss:
     // scheme for that same wildcard -- CSP schemes are matched independently,
     // so a wildcard covering the https: version of a domain does NOT also
@@ -922,7 +927,11 @@ function createWindow() {
     // firebaseinstallations/fcmregistrations are the two Google endpoints
     // firebase/messaging's getToken() itself fetches -- needed once SW
     // registration succeeds, or getToken() fails next with its own CSP block.
-    "connect-src 'self' https://joinvoyd.com https://*.joinvoyd.com wss://*.joinvoyd.com https://*.supabase.co wss://*.supabase.co wss://fjvijrbfbzdjsyiwqwfd.supabase.co https://*.agora.io wss://*.agora.io https://livekit.io wss://*.livekit.io https://firebaseinstallations.googleapis.com https://fcmregistrations.googleapis.com",
+    // cdn.jsdelivr.net (again, for the wasm binary itself, fetched not
+    // script-tag-loaded) and storage.googleapis.com (the actual
+    // selfie_segmenter .tflite model binary ImageSegmenter fetches) are the
+    // other two hosts BackgroundTransformer.init() hits for background blur.
+    "connect-src 'self' https://joinvoyd.com https://*.joinvoyd.com wss://*.joinvoyd.com https://*.supabase.co wss://*.supabase.co wss://fjvijrbfbzdjsyiwqwfd.supabase.co https://*.agora.io wss://*.agora.io https://livekit.io wss://*.livekit.io https://firebaseinstallations.googleapis.com https://fcmregistrations.googleapis.com https://cdn.jsdelivr.net https://storage.googleapis.com",
     "img-src 'self' data: blob: https:",
     "media-src 'self' blob: https:",
     // style-src is a strict allowlist (unlike font-src/img-src below, which
@@ -1144,6 +1153,25 @@ function createWindow() {
     })
   })
 }
+
+// Required by Electron for the Push API (what firebase/messaging's getToken()
+// uses under the hood via PushManager.subscribe()) to work at all -- stock
+// Chrome ships with Google API keys baked in for this; Electron's Chromium
+// does not, so without these, subscribe() reaches Google's push service and
+// gets rejected with "AbortError: Registration failed - push service not
+// available" regardless of anything else being correct (confirmed: this repo
+// had none of the three set anywhere). Must be set before app.whenReady().
+// GOOGLE_API_KEY reuses this app's own Firebase Web API key (src/lib/firebase.ts
+// -- already public in the client bundle, same GCP project, not a new secret).
+// GOOGLE_DEFAULT_CLIENT_ID/SECRET are a separate, still-missing requirement:
+// an OAuth 2.0 Client ID of type "Desktop app", created in Google Cloud
+// Console under the voydapp-dddc9 project (APIs & Services > Credentials).
+// That's an account-holder setup step, not something derivable from existing
+// code -- until it's created and these two are filled in, push registration
+// will still fail with the same AbortError even with the API key set.
+process.env.GOOGLE_API_KEY = 'AIzaSyAuA2k4R0oDeJmTe45LhWgOdKlEY8pq9Fw'
+// process.env.GOOGLE_DEFAULT_CLIENT_ID = ''
+// process.env.GOOGLE_DEFAULT_CLIENT_SECRET = ''
 
 app.whenReady().then(() => {
   cleanupOrphanedExtractionFolders()
