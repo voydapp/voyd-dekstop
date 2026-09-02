@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   sendVoiceState: (state) => ipcRenderer.send('voice-state-update', state),
   sendOverlaySettings: (settings) => ipcRenderer.send('overlay-settings-update', settings),
+  sendUserKeybinds: (keybinds) => ipcRenderer.send('user-keybinds-update', keybinds),
   sendCameraFrames: (frames) => ipcRenderer.send('camera-frames-update', frames),
   startPushNotificationService: (config) => ipcRenderer.send(START_NOTIFICATION_SERVICE, config),
   onPushServiceStarted: (callback) => {

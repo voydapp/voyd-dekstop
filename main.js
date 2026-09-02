@@ -633,6 +633,41 @@ let streamerMode = false
 // alone to have done that.
 let overlayShowCameraTiles = true
 
+// user_keybinds sync (Settings > Keybinds tab). Two actions genuinely need
+// OS-level global registration (must fire while a game/other app has OS
+// focus, same reason overlayKeybind is global): toggle_mute, toggle_deafen.
+// The rest (quick_switcher, navigate_up, navigate_down) only ever needed to
+// work while VOYD itself is focused, matching the existing focus/blur
+// register-on-demand pattern below -- kept that way rather than promoting
+// them to always-global, which would let them clash with other apps'
+// shortcuts the moment VOYD is in the background.
+//
+// push_to_talk is deliberately NOT included here: Electron's globalShortcut
+// only fires on key-down, with no matching key-up/release event, so it
+// cannot express "hold" semantics -- there is no accelerator-based way to
+// know when the user lets go. Wiring it here would either misbehave as a
+// toggle (wrong semantics for "push to talk") or require a native
+// low-level-keyboard-hook dependency, which is a bigger, separate change.
+// Left unregistered; STATUS.md should track this as a known gap, not silently
+// dropped.
+const GLOBAL_KEYBIND_ACTIONS = ['toggle_mute', 'toggle_deafen']
+const FOCUS_ONLY_KEYBIND_ACTIONS = ['quick_switcher', 'navigate_up', 'navigate_down']
+
+// Hardcoded fallbacks -- same "brief window before the renderer's first
+// push arrives, or a fresh install with no saved rows yet" role as
+// overlayKeybind above. Matches this table's pre-existing hardcoded
+// defaults so a user who has never touched Settings > Keybinds sees no
+// behavior change.
+const globalKeybindAccelerators = {
+  toggle_mute: 'CommandOrControl+Shift+M',
+  toggle_deafen: 'CommandOrControl+Shift+D',
+}
+const focusOnlyKeybindAccelerators = {
+  quick_switcher: 'CommandOrControl+K',
+  navigate_up: 'Alt+Up',
+  navigate_down: 'Alt+Down',
+}
+
 // Named corner anchors, not raw x/y — recomputed against whatever the
 // primary display's current work area is, so this is correct across
 // resolution/monitor changes rather than pinning to a coordinate that may
@@ -706,6 +741,86 @@ function registerOverlayShortcut(accelerator) {
   overlayKeybind = accelerator
   return true
 }
+
+// Same register-new-before-unregister-old safety as registerOverlayShortcut:
+// an invalid or OS-claimed accelerator leaves the previous binding intact
+// instead of leaving the action with no shortcut at all.
+function registerGlobalKeybind(action, accelerator) {
+  if (accelerator === globalKeybindAccelerators[action] && globalShortcut.isRegistered(accelerator)) return true
+
+  const registered = globalShortcut.register(accelerator, () => {
+    mainWindow?.webContents.send('keybind', action)
+  })
+  if (!registered) {
+    console.error('[main] keybind registration failed (invalid or already in use):', action, accelerator)
+    return false
+  }
+  const previous = globalKeybindAccelerators[action]
+  if (previous && previous !== accelerator) {
+    globalShortcut.unregister(previous)
+  }
+  globalKeybindAccelerators[action] = accelerator
+  return true
+}
+
+// FIX 7 (moved to module scope so it's reachable from user-keybinds-update
+// below, not just from inside createWindow): local shortcuts only active
+// while the VOYD window itself is focused. quick_switcher/navigate_up/
+// navigate_down read the user's saved combo; open_settings and the two
+// navigate_unread_* actions aren't user-configurable (no user_keybinds row
+// for them) and stay on their original hardcoded combos.
+function getLocalShortcutsList() {
+  return [
+    { key: focusOnlyKeybindAccelerators.quick_switcher, action: 'quick_switcher' },
+    { key: 'CommandOrControl+,', action: 'open_settings' },
+    { key: focusOnlyKeybindAccelerators.navigate_up, action: 'navigate_up' },
+    { key: focusOnlyKeybindAccelerators.navigate_down, action: 'navigate_down' },
+    { key: 'Alt+Shift+Up', action: 'navigate_unread_up' },
+    { key: 'Alt+Shift+Down', action: 'navigate_unread_down' },
+  ]
+}
+
+function registerLocalShortcuts() {
+  getLocalShortcutsList().forEach(({ key, action }) => {
+    globalShortcut.register(key, () => {
+      mainWindow?.webContents.send('keybind', action)
+    })
+  })
+}
+
+function unregisterLocalShortcuts() {
+  getLocalShortcutsList().forEach(({ key }) => {
+    globalShortcut.unregister(key)
+  })
+}
+
+// Renderer pushes the user's saved user_keybinds rows here (useDesktopKeybindsSync,
+// on load and after every Settings > Keybinds save). Applies live, no restart --
+// same reasoning as overlay-settings-update below.
+ipcMain.on('user-keybinds-update', (_event, keybinds) => {
+  if (!Array.isArray(keybinds)) return
+
+  // Unregister focus-only shortcuts using the CURRENT (old) accelerators
+  // before mutating focusOnlyKeybindAccelerators below -- otherwise
+  // unregister() would be called with the already-new key, which was never
+  // registered, silently leaking the real old registration.
+  const wasFocused = !!mainWindow?.isFocused()
+  if (wasFocused) unregisterLocalShortcuts()
+
+  for (const kb of keybinds) {
+    if (!kb || kb.is_enabled === false || !kb.key_combination) continue
+
+    if (GLOBAL_KEYBIND_ACTIONS.includes(kb.action)) {
+      // registerGlobalKeybind does its own old/new swap internally --
+      // safe regardless of focus state, since these are always registered.
+      registerGlobalKeybind(kb.action, kb.key_combination)
+    } else if (FOCUS_ONLY_KEYBIND_ACTIONS.includes(kb.action)) {
+      focusOnlyKeybindAccelerators[kb.action] = kb.key_combination
+    }
+  }
+
+  if (wasFocused) registerLocalShortcuts()
+})
 
 // Phase 2 — the renderer (which has the Supabase session) reads
 // overlay_keybind/overlay_position from user_settings and pushes them here,
@@ -1120,39 +1235,16 @@ function createWindow() {
   })
 
   // FIX 4: Keybinds via IPC instead of executeJavaScript
-  // Global shortcuts for mute/deafen (need to work when window is unfocused)
-  globalShortcut.register('CommandOrControl+Shift+M', () => {
-    mainWindow?.webContents.send('keybind', 'toggle_mute')
-  })
+  // Global shortcuts for mute/deafen (need to work when window is unfocused).
+  // Registers the Phase-1-style hardcoded defaults; the renderer's first
+  // user-keybinds-update push (useDesktopKeybindsSync) re-applies the user's
+  // actual saved combo on top of this, same pattern as registerOverlayShortcut.
+  registerGlobalKeybind('toggle_mute', globalKeybindAccelerators.toggle_mute)
+  registerGlobalKeybind('toggle_deafen', globalKeybindAccelerators.toggle_deafen)
 
-  globalShortcut.register('CommandOrControl+Shift+D', () => {
-    mainWindow?.webContents.send('keybind', 'toggle_deafen')
-  })
-
-  // FIX 7: Local shortcuts for app-specific actions (only active when window is focused)
-  const localShortcuts = [
-    { key: 'CommandOrControl+K', action: 'quick_switcher' },
-    { key: 'CommandOrControl+,', action: 'open_settings' },
-    { key: 'Alt+Up', action: 'navigate_up' },
-    { key: 'Alt+Down', action: 'navigate_down' },
-    { key: 'Alt+Shift+Up', action: 'navigate_unread_up' },
-    { key: 'Alt+Shift+Down', action: 'navigate_unread_down' },
-  ]
-
-  const registerLocalShortcuts = () => {
-    localShortcuts.forEach(({ key, action }) => {
-      globalShortcut.register(key, () => {
-        mainWindow?.webContents.send('keybind', action)
-      })
-    })
-  }
-
-  const unregisterLocalShortcuts = () => {
-    localShortcuts.forEach(({ key }) => {
-      globalShortcut.unregister(key)
-    })
-  }
-
+  // FIX 7: Local shortcuts for app-specific actions (only active when window is focused).
+  // registerLocalShortcuts/unregisterLocalShortcuts are module-level now (see
+  // user-keybinds-update above) so they can be re-applied live on a combo change.
   mainWindow.on('focus', registerLocalShortcuts)
   mainWindow.on('blur', unregisterLocalShortcuts)
 
