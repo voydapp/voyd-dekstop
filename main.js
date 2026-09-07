@@ -1,10 +1,25 @@
-const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen, Notification, desktopCapturer, dialog } = require('electron')
+const { app, BrowserWindow, shell, globalShortcut, ipcMain, Tray, Menu, nativeImage, session, screen, Notification, desktopCapturer, dialog, systemPreferences } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const fs = require('fs')
 const { execSync } = require('child_process')
 const gameDetection = require('./gameDetection')
 const { setup: setupPushReceiver } = require('@superhuman/electron-push-receiver')
+
+// Native key-hook dependency for push-to-talk (see PTT section below for why
+// globalShortcut can't do this). Ships prebuilt N-API binaries for every
+// platform/arch this app targets (win32-x64, darwin-x64/arm64, linux-x64) so
+// there's no compile step -- but require() can still fail on some exotic
+// host (an unsupported arch, a corrupted install), and PTT is a nice-to-have,
+// not core functionality. Guarded so a failure here degrades to "PTT global
+// hook unavailable" instead of taking the whole app down.
+let uIOhook = null
+let UiohookKey = null
+try {
+  ({ uIOhook, UiohookKey } = require('uiohook-napi'))
+} catch (err) {
+  console.error('[main] uiohook-napi unavailable -- push-to-talk global hook disabled:', err?.message)
+}
 
 // Minimal inline .env loader (KEY=VALUE per line, '#' comments, blank lines
 // skipped) -- avoids an extra dependency for what's only ever two values.
@@ -645,11 +660,10 @@ let overlayShowCameraTiles = true
 // push_to_talk is deliberately NOT included here: Electron's globalShortcut
 // only fires on key-down, with no matching key-up/release event, so it
 // cannot express "hold" semantics -- there is no accelerator-based way to
-// know when the user lets go. Wiring it here would either misbehave as a
-// toggle (wrong semantics for "push to talk") or require a native
-// low-level-keyboard-hook dependency, which is a bigger, separate change.
-// Left unregistered; STATUS.md should track this as a known gap, not silently
-// dropped.
+// know when the user lets go. Handled instead by the uIOhook-based PTT
+// section further down, which is a genuinely separate mechanism (a raw
+// key-hook, not an accelerator registration) rather than a variant of this
+// table.
 const GLOBAL_KEYBIND_ACTIONS = ['toggle_mute', 'toggle_deafen']
 const FOCUS_ONLY_KEYBIND_ACTIONS = ['quick_switcher', 'navigate_up', 'navigate_down']
 
@@ -730,13 +744,34 @@ function autoShowOverlayWindow() {
 function registerOverlayShortcut(accelerator) {
   if (accelerator === overlayKeybind && globalShortcut.isRegistered(accelerator)) return true
 
-  const registered = globalShortcut.register(accelerator, toggleOverlayWindow)
+  // globalShortcut.register() has two distinct failure modes: an accelerator
+  // that's syntactically valid but already claimed (by this app or another)
+  // returns false, but one containing a token its parser doesn't recognize
+  // at all (e.g. a stale saved value using a DOM key name like 'ArrowUp'
+  // instead of Electron's 'Up') throws synchronously instead. Both are
+  // treated the same way here -- leave the existing binding alone -- rather
+  // than letting the throw propagate past the !registered check below.
+  let registered = false
+  try {
+    registered = globalShortcut.register(accelerator, toggleOverlayWindow)
+  } catch (err) {
+    console.error('[main] overlay keybind registration threw (unrecognized accelerator):', accelerator, err?.message)
+  }
   if (!registered) {
     console.error('[main] overlay keybind registration failed (invalid or already in use):', accelerator)
     return false
   }
   if (overlayKeybind && overlayKeybind !== accelerator) {
-    globalShortcut.unregister(overlayKeybind)
+    // Same unrecognized-token-throws behavior as register() -- guarded so a
+    // stale bad overlayKeybind value can't abort this function before
+    // overlayKeybind gets reassigned below (which would leave the new
+    // accelerator registered at the OS level but never reflected in state,
+    // and the old one never actually released).
+    try {
+      globalShortcut.unregister(overlayKeybind)
+    } catch (err) {
+      console.error('[main] overlay keybind unregistration threw (unrecognized accelerator):', overlayKeybind, err?.message)
+    }
   }
   overlayKeybind = accelerator
   return true
@@ -748,16 +783,29 @@ function registerOverlayShortcut(accelerator) {
 function registerGlobalKeybind(action, accelerator) {
   if (accelerator === globalKeybindAccelerators[action] && globalShortcut.isRegistered(accelerator)) return true
 
-  const registered = globalShortcut.register(accelerator, () => {
-    mainWindow?.webContents.send('keybind', action)
-  })
+  // See registerOverlayShortcut's comment above -- an unrecognized-token
+  // accelerator throws instead of returning false, and needs the same
+  // "leave the existing binding alone" treatment.
+  let registered = false
+  try {
+    registered = globalShortcut.register(accelerator, () => {
+      mainWindow?.webContents.send('keybind', action)
+    })
+  } catch (err) {
+    console.error('[main] keybind registration threw (unrecognized accelerator):', action, accelerator, err?.message)
+  }
   if (!registered) {
     console.error('[main] keybind registration failed (invalid or already in use):', action, accelerator)
     return false
   }
   const previous = globalKeybindAccelerators[action]
   if (previous && previous !== accelerator) {
-    globalShortcut.unregister(previous)
+    // See registerOverlayShortcut's matching unregister guard above.
+    try {
+      globalShortcut.unregister(previous)
+    } catch (err) {
+      console.error('[main] keybind unregistration threw (unrecognized accelerator):', action, previous, err?.message)
+    }
   }
   globalKeybindAccelerators[action] = accelerator
   return true
@@ -782,15 +830,38 @@ function getLocalShortcutsList() {
 
 function registerLocalShortcuts() {
   getLocalShortcutsList().forEach(({ key, action }) => {
-    globalShortcut.register(key, () => {
-      mainWindow?.webContents.send('keybind', action)
-    })
+    // Per-binding try/catch is load-bearing here, not just tidiness: an
+    // unrecognized-token accelerator (see registerOverlayShortcut's comment)
+    // throws synchronously, and .forEach() does not catch exceptions from
+    // its callback -- an uncaught throw on any one entry aborts the entire
+    // loop, silently skipping every entry after it in getLocalShortcutsList's
+    // fixed order, not just the bad one. Confirmed live: a saved navigate_up
+    // accelerator of 'ArrowUp' (a DOM key name, not a valid Electron
+    // accelerator token) broke navigate_down and both navigate_unread_*
+    // shortcuts too, every single time this ran (on launch and on every
+    // window focus), with nothing surfaced anywhere.
+    try {
+      globalShortcut.register(key, () => {
+        mainWindow?.webContents.send('keybind', action)
+      })
+    } catch (err) {
+      console.error('[main] local shortcut registration threw (unrecognized accelerator) -- other shortcuts still applied:', action, key, err?.message)
+    }
   })
 }
 
 function unregisterLocalShortcuts() {
   getLocalShortcutsList().forEach(({ key }) => {
-    globalShortcut.unregister(key)
+    // Same throw-on-unrecognized-token behavior as register() (see
+    // registerLocalShortcuts above) -- confirmed live: unregister('ArrowUp')
+    // throws too, and this runs on every window 'blur' event, so a bad saved
+    // accelerator was firing an uncaught exception on every single focus
+    // change, not just once. Same per-binding guard for the same reason.
+    try {
+      globalShortcut.unregister(key)
+    } catch (err) {
+      console.error('[main] local shortcut unregistration threw (unrecognized accelerator) -- other shortcuts still applied:', key, err?.message)
+    }
   })
 }
 
@@ -820,6 +891,179 @@ ipcMain.on('user-keybinds-update', (_event, keybinds) => {
   }
 
   if (wasFocused) registerLocalShortcuts()
+})
+
+// ── Push-to-talk (uIOhook global key hook) ──────────────────────────────────
+//
+// Why this can't reuse the globalShortcut table above: PTT needs to know the
+// instant the key is RELEASED, not just that it was pressed. globalShortcut
+// only ever fires once per press with no matching release event -- there is
+// no accelerator API for "and tell me when they let go". uIOhook is a raw
+// low-level key hook (keydown AND keyup, like a game's input layer) that
+// works whether or not any Electron window has OS focus, same requirement
+// overlayKeybind/toggle_mute/toggle_deafen have. It's intentionally NOT
+// merged into the 'keybind' IPC channel those use: that channel is a single
+// fire-once action string (mainWindow.send('keybind', 'toggle_mute')) with
+// no notion of a press/release pair, and PTT's state (is the key currently
+// held) lives entirely in the renderer's VoiceContext already -- forcing PTT
+// through the same channel would mean inventing 'push_to_talk_down' /
+// 'push_to_talk_up' pseudo-actions on a channel modeled around a different
+// shape, for no real benefit. A dedicated 'push-to-talk' channel carrying a
+// boolean is a truer fit and keeps the two mechanisms from being confused
+// with each other.
+//
+// Only started/stopped on demand (not left running for the app's whole
+// lifetime) for two reasons: it's a global key-hook, so idling it whenever
+// PTT is off is the considerate default privacy/perf-wise, and starting it
+// is also the trigger point for the macOS Accessibility permission check
+// below -- we want that check to happen right when it's actually needed
+// (PTT turned on), not unconditionally on every launch.
+let pttEnabled = false
+let pttUiohookKeycode = null // resolved via domCodeToUiohookKey, or null if unmapped/unset
+let pttKeyIsDown = false // suppresses OS key-repeat re-firing 'down' on every autorepeat tick
+let uiohookRunning = false
+
+// push_to_talk_key (Settings > Voice) is stored as a browser
+// KeyboardEvent.code string (e.g. 'Space', 'KeyA', 'Digit1', 'F5') -- see
+// PttKeyBinder in UserSettingsPanel.tsx. uIOhook's UiohookKey enum uses its
+// own naming, but for the overwhelming majority of keys the names are
+// identical to the DOM `code` value (Space, ArrowUp, F1-F24, Numpad*,
+// punctuation names like Semicolon/Comma/Slash all match as-is). The only
+// systematic mismatches: DOM prefixes letters/digits with Key/Digit
+// ('KeyA', 'Digit5'), and DOM's Left-side modifier names carry a 'Left'
+// suffix uIOhook doesn't use ('ControlLeft' -> Ctrl, not CtrlLeft). PTT can
+// never actually be bound to a bare modifier key (PttKeyBinder's recorder
+// filters out a lone Control/Shift/Alt/Meta press while listening), but the
+// map below covers them anyway rather than leaving a silent gap.
+const PTT_MODIFIER_CODE_MAP = {
+  ControlLeft: 'Ctrl', ControlRight: 'CtrlRight',
+  AltLeft: 'Alt', AltRight: 'AltRight',
+  ShiftLeft: 'Shift', ShiftRight: 'ShiftRight',
+  MetaLeft: 'Meta', MetaRight: 'MetaRight',
+}
+
+function domCodeToUiohookKey(code) {
+  if (!code || !UiohookKey) return null
+  if (/^Key[A-Z]$/.test(code)) return UiohookKey[code.slice(3)] ?? null
+  if (/^Digit[0-9]$/.test(code)) return UiohookKey[code.slice(5)] ?? null
+  if (PTT_MODIFIER_CODE_MAP[code]) return UiohookKey[PTT_MODIFIER_CODE_MAP[code]] ?? null
+  return UiohookKey[code] ?? null
+}
+
+// macOS gates any global key-capture behind Accessibility (or, on newer
+// macOS, Input Monitoring, which the same Accessibility trust check covers
+// for CGEventTap-based hooks like libuiohook's) -- without it, uIOhook.start()
+// does not throw or error, it just runs and silently receives no events. That
+// silent-failure shape is exactly what the renderer needs to be able to tell
+// apart from "PTT is on and working": startUiohookIfNeeded() below checks
+// permission BEFORE starting and tells the renderer explicitly when it's
+// blocked on this, rather than starting anyway and leaving the user to
+// wonder why holding the key does nothing. Windows and Linux have no
+// equivalent gate -- isAccessibilityGated() is false there and this whole
+// path is skipped.
+function isAccessibilityGated() {
+  return process.platform === 'darwin'
+}
+
+function hasAccessibilityPermission() {
+  if (!isAccessibilityGated()) return true
+  return systemPreferences.isTrustedAccessibilityClient(false)
+}
+
+function startUiohookIfNeeded() {
+  if (uiohookRunning || !uIOhook) return
+  if (isAccessibilityGated() && !hasAccessibilityPermission()) {
+    mainWindow?.webContents.send('push-to-talk-permission-needed')
+    return
+  }
+  try {
+    uIOhook.start()
+    uiohookRunning = true
+  } catch (err) {
+    console.error('[main] uIOhook.start() failed -- push-to-talk will not fire:', err?.message)
+  }
+}
+
+function stopUiohookIfRunning() {
+  if (!uiohookRunning || !uIOhook) return
+  uIOhook.stop()
+  uiohookRunning = false
+  pttKeyIsDown = false
+}
+
+function applyPushToTalkState() {
+  if (pttEnabled && pttUiohookKeycode != null) {
+    startUiohookIfNeeded()
+  } else {
+    stopUiohookIfRunning()
+  }
+}
+
+// Matches on keycode only, ignoring e.ctrlKey/shiftKey/altKey/metaKey --
+// correct for a PTT key, which is always a single physical key (never a
+// modifier combo, see domCodeToUiohookKey's comment above), the same way a
+// game's "hold to talk" binding cares only about the key, not what else is
+// held alongside it. This can never fight with globalShortcut's OS-level
+// hotkey registrations (toggle_mute's Ctrl+Shift+M, etc.): uIOhook is a
+// passive raw-input tap (CGEventTap / WH_KEYBOARD_LL / XRecord depending on
+// platform), not a hotkey claim, so it never blocks or is blocked by
+// whatever globalShortcut has registered -- they observe the same key
+// events through entirely separate OS mechanisms. The one thing to be aware
+// of: if a user's PTT key happens to be a bare key that's also part of
+// another combo they've bound (e.g. PTT on 'M' while toggle_mute is still
+// Ctrl+Shift+M), pressing that combo fires BOTH -- expected given PTT is
+// modifier-agnostic by design, not a bug in either mechanism.
+if (uIOhook) {
+  uIOhook.on('keydown', (e) => {
+    if (!pttEnabled || pttUiohookKeycode == null || e.keycode !== pttUiohookKeycode) return
+    if (pttKeyIsDown) return // key-repeat autofire while held -- already told the renderer once
+    pttKeyIsDown = true
+    mainWindow?.webContents.send('push-to-talk', true)
+  })
+  uIOhook.on('keyup', (e) => {
+    if (!pttEnabled || pttUiohookKeycode == null || e.keycode !== pttUiohookKeycode) return
+    if (!pttKeyIsDown) return
+    pttKeyIsDown = false
+    mainWindow?.webContents.send('push-to-talk', false)
+  })
+}
+
+// Renderer pushes { enabled, key } here (useDesktopPushToTalkSync) on load
+// and on every Settings > Voice change to push_to_talk / push_to_talk_key.
+// A key that fails to resolve (domCodeToUiohookKey returns null -- shouldn't
+// happen for anything PttKeyBinder can actually record, but a DB row could
+// in principle hold something stale) leaves the hook stopped rather than
+// starting it with a keycode of null, which would silently never match
+// any real key event.
+ipcMain.on('push-to-talk-settings-update', (_event, settings) => {
+  pttEnabled = !!settings?.enabled
+  pttUiohookKeycode = pttEnabled ? domCodeToUiohookKey(settings?.key) : null
+  applyPushToTalkState()
+})
+
+// Settings UI's permission prompt (shown after a 'push-to-talk-permission-needed'
+// push above) calls this on its "Retry" action -- re-checks current trust
+// status and, if now granted, actually starts the hook rather than making
+// the user re-toggle the PTT setting off/on to retrigger applyPushToTalkState.
+ipcMain.handle('push-to-talk-recheck-permission', () => {
+  const granted = hasAccessibilityPermission()
+  if (granted) applyPushToTalkState()
+  return granted
+})
+
+// Triggers macOS's native "VOYD would like to control this computer using
+// Accessibility features" system prompt (only fires once per app install --
+// isTrustedAccessibilityClient(true) is a no-op if the user already
+// answered it, which is exactly why the Settings UI also needs the
+// System Settings deep-link below for the retry path after a denial).
+ipcMain.handle('push-to-talk-request-permission', () => {
+  if (!isAccessibilityGated()) return true
+  return systemPreferences.isTrustedAccessibilityClient(true)
+})
+
+ipcMain.on('push-to-talk-open-system-settings', () => {
+  if (process.platform !== 'darwin') return
+  shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')
 })
 
 // Phase 2 — the renderer (which has the Supabase session) reads
@@ -1315,6 +1559,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  stopUiohookIfRunning()
 })
 
 app.on('window-all-closed', () => {

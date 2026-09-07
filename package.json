@@ -12,6 +12,7 @@
     "appId": "com.voyd.desktop",
     "productName": "VOYD",
     "compression": "maximum",
+    "npmRebuild": false,
     "files": [
       "main.js",
       "preload.js",
@@ -27,6 +28,9 @@
       "!node_modules/**/*.md",
       "!node_modules/**/LICENSE",
       "!node_modules/**/*.map"
+    ],
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**"
     ],
     "extraResources": [
       {
@@ -81,7 +85,8 @@
     "@capacitor/android": "^8.2.0",
     "@superhuman/electron-push-receiver": "^2.1.9",
     "electron-updater": "^6.3.9",
-    "ps-list": "^9.0.0"
+    "ps-list": "^9.0.0",
+    "uiohook-napi": "^1.5.5"
   },
   "overrides": {
     "protobufjs": "^8.8.0"

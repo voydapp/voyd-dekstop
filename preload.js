@@ -33,6 +33,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendOverlaySettings: (settings) => ipcRenderer.send('overlay-settings-update', settings),
   sendUserKeybinds: (keybinds) => ipcRenderer.send('user-keybinds-update', keybinds),
   sendCameraFrames: (frames) => ipcRenderer.send('camera-frames-update', frames),
+  sendPushToTalkSettings: (settings) => ipcRenderer.send('push-to-talk-settings-update', settings),
+  onPushToTalk: (callback) => {
+    ipcRenderer.on('push-to-talk', (_event, isDown) => callback(isDown))
+  },
+  onPushToTalkPermissionNeeded: (callback) => {
+    ipcRenderer.on('push-to-talk-permission-needed', () => callback())
+  },
+  requestPushToTalkPermission: () => ipcRenderer.invoke('push-to-talk-request-permission'),
+  recheckPushToTalkPermission: () => ipcRenderer.invoke('push-to-talk-recheck-permission'),
+  openPushToTalkSystemSettings: () => ipcRenderer.send('push-to-talk-open-system-settings'),
   startPushNotificationService: (config) => ipcRenderer.send(START_NOTIFICATION_SERVICE, config),
   onPushServiceStarted: (callback) => {
     ipcRenderer.on(NOTIFICATION_SERVICE_STARTED, (_event, token) => callback(token))
