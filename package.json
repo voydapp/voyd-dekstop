@@ -20,6 +20,8 @@
       "gameDetection.js",
       "overlay-preload.js",
       "overlay.html",
+      "source-picker-preload.js",
+      "source-picker.html",
       "overlay-renderer.js",
       "app-update.yml",
       "assets/**",

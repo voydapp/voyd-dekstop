@@ -1169,6 +1169,58 @@ function createOverlayWindow() {
   overlayWindow.on('closed', () => { overlayWindow = null })
 }
 
+// Windows/Linux screen-share source picker -- useSystemPicker (macOS 15+
+// only) is a no-op on these platforms, so setDisplayMediaRequestHandler's
+// fallback would otherwise silently auto-pick the first available source
+// with no user choice at all. This shows a real chooser with real
+// thumbnails and only resolves once the user actually picks something
+// (or cancels, which resolves null). Does not affect the macOS path.
+function showSourcePicker(sources) {
+  return new Promise((resolve) => {
+    const pickerWindow = new BrowserWindow({
+      width: 760,
+      height: 560,
+      frame: false,
+      resizable: false,
+      alwaysOnTop: true,
+      title: 'Choose what to share',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, 'source-picker-preload.js'),
+        // Own in-memory session, same isolation reasoning as overlayWindow.
+        partition: 'source-picker-window',
+      },
+    })
+
+    let settled = false
+    const finish = (sourceId) => {
+      if (settled) return
+      settled = true
+      ipcMain.removeListener('source-picker-select', onSelect)
+      ipcMain.removeListener('source-picker-cancel', onCancel)
+      if (!pickerWindow.isDestroyed()) pickerWindow.close()
+      resolve(sourceId)
+    }
+    const onSelect = (_event, sourceId) => finish(sourceId)
+    const onCancel = () => finish(null)
+
+    ipcMain.on('source-picker-select', onSelect)
+    ipcMain.on('source-picker-cancel', onCancel)
+    pickerWindow.on('closed', () => finish(null))
+
+    pickerWindow.loadFile(path.join(__dirname, 'source-picker.html'))
+    pickerWindow.webContents.once('did-finish-load', () => {
+      const payload = sources.map((s) => ({
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail && !s.thumbnail.isEmpty() ? s.thumbnail.toDataURL() : '',
+      }))
+      pickerWindow.webContents.send('source-picker-sources', payload)
+    })
+  })
+}
+
 function createTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png')).resize({ width: 16, height: 16 })
   tray = new Tray(icon)
@@ -1369,30 +1421,47 @@ function createWindow() {
   // above only gates plain getUserMedia (mic/camera), a separate permission
   // path that was already correctly wired.
   //
-  // CORRECTION (previous comment here was wrong): useSystemPicker is
-  // documented as macOS 15+ only and experimental -- verified directly
-  // against Electron's docs, not assumed. It does NOT delegate to Windows'
-  // Graphics Capture picker or anything else on Windows; on this platform
-  // it's simply a no-op and the handler below always runs. Left enabled
-  // since it's harmless and correct for future macOS support, but on
-  // Windows this callback is genuinely always what runs, not a fallback
-  // path for an edge case.
-  //
-  // Because of that, this always auto-picks the first available screen
-  // with NO user choice of window/screen on Windows -- a real UX gap, not
-  // just a "rare fallback", worth a proper source-picker UI at some point.
+  // useSystemPicker is documented as macOS 15+ only and experimental --
+  // verified directly against Electron's docs, not assumed. It does NOT
+  // delegate to Windows' Graphics Capture picker or anything else on
+  // Windows; on that platform it's simply a no-op and the handler below
+  // always runs. Left enabled (harmless, correct for macOS) -- the branch
+  // below is an ADDITIONAL Windows/Linux-specific in-app picker, not a
+  // replacement for the macOS system picker, which stays exactly as it was.
   voydSession.setDisplayMediaRequestHandler((request, callback) => {
     logUpdate(`[screenshare] handler invoked, videoRequested=${request?.videoRequested} audioRequested=${request?.audioRequested}`)
-    desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 0, height: 0 } })
+    desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 320, height: 180 } })
       .then((sources) => {
         logUpdate(`[screenshare] desktopCapturer found ${sources.length} source(s): ${sources.map((s) => s.id).join(', ')}`)
-        const fallback = sources.find((s) => s.id.startsWith('screen:')) || sources[0]
-        if (!fallback) {
-          logUpdate('[screenshare] no sources available at all -- calling back with empty streams')
-        } else {
-          logUpdate(`[screenshare] picking source: ${fallback.id} (${fallback.name})`)
+
+        // macOS: useSystemPicker above already handles the real UI in the
+        // normal case, so this path is only a rare fallback there --
+        // unchanged, same auto-pick-first-screen behavior as before.
+        if (process.platform === 'darwin') {
+          const fallback = sources.find((s) => s.id.startsWith('screen:')) || sources[0]
+          callback(fallback ? { video: fallback, audio: 'loopback' } : {})
+          return
         }
-        callback(fallback ? { video: fallback, audio: 'loopback' } : {})
+
+        // Windows/Linux: useSystemPicker is a no-op, so this is genuinely
+        // always what runs -- show a real in-app chooser instead of
+        // auto-picking. Only calls back once the user actually chooses.
+        if (sources.length === 0) {
+          logUpdate('[screenshare] no sources available at all -- calling back with empty streams')
+          callback({})
+          return
+        }
+        showSourcePicker(sources)
+          .then((chosenId) => {
+            const chosen = sources.find((s) => s.id === chosenId)
+            if (!chosen) {
+              logUpdate('[screenshare] user cancelled the source picker')
+              callback({})
+              return
+            }
+            logUpdate(`[screenshare] user picked source: ${chosen.id} (${chosen.name})`)
+            callback({ video: chosen, audio: 'loopback' })
+          })
       })
       .catch((err) => {
         logUpdate(`[screenshare] desktopCapturer.getSources failed: ${err?.message || err}`)

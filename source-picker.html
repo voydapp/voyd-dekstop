@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Choose what to share</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #1e1f22; color: #f2f3f5;
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    -webkit-app-region: drag;
+    overflow: hidden;
+  }
+  #header {
+    padding: 16px 20px 8px;
+    font-size: 15px; font-weight: 600;
+  }
+  #grid {
+    -webkit-app-region: no-drag;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+    padding: 8px 20px 20px;
+    overflow-y: auto;
+    height: calc(100% - 48px - 56px);
+  }
+  .source {
+    background: #2b2d31;
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 8px;
+    cursor: pointer;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .source:hover { border-color: #5865f2; background: #35373c; }
+  .source img {
+    width: 100%; aspect-ratio: 16 / 9; object-fit: contain;
+    background: #111214; border-radius: 4px;
+  }
+  .source .name {
+    font-size: 12px; color: #dbdee1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #footer {
+    -webkit-app-region: no-drag;
+    height: 56px;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 20px;
+    border-top: 1px solid #2b2d31;
+  }
+  button {
+    -webkit-app-region: no-drag;
+    background: #383a40; color: #f2f3f5; border: none;
+    padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { background: #46484e; }
+  #empty { padding: 20px; color: #949ba4; font-size: 13px; }
+</style>
+</head>
+<body>
+  <div id="header">Choose what to share</div>
+  <div id="grid"><div id="empty">Loading sources...</div></div>
+  <div id="footer"><button id="cancelBtn">Cancel</button></div>
+  <script>
+    const grid = document.getElementById('grid')
+    window.sourcePickerAPI.onSources((sources) => {
+      grid.innerHTML = ''
+      if (!sources || sources.length === 0) {
+        grid.innerHTML = '<div id="empty">No shareable windows or screens found.</div>'
+        return
+      }
+      for (const s of sources) {
+        const el = document.createElement('div')
+        el.className = 'source'
+        el.innerHTML = `<img src="${s.thumbnail}" alt=""><div class="name">${s.name.replace(/</g, '&lt;')}</div>`
+        el.addEventListener('click', () => window.sourcePickerAPI.select(s.id))
+        grid.appendChild(el)
+      }
+    })
+    document.getElementById('cancelBtn').addEventListener('click', () => window.sourcePickerAPI.cancel())
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') window.sourcePickerAPI.cancel()
+    })
+  </script>
+</body>
+</html>
