@@ -13,6 +13,12 @@
     "productName": "VOYD",
     "compression": "maximum",
     "npmRebuild": false,
+    "protocols": [
+      {
+        "name": "VOYD",
+        "schemes": ["voyd"]
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",

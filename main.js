@@ -46,6 +46,69 @@ let tray = null
 let mainWindow = null
 let overlayWindow = null
 
+// ── voyd:// deep linking ─────────────────────────────────────────────────
+// The app has no separate renderer bundle to IPC into -- it's a thin shell
+// that loads the real site (see createWindow's mainWindow.loadURL below), so
+// the natural way to hand off deep-link context is to load the specific URL
+// the link points at, not invent an IPC channel to a renderer that doesn't
+// have its own routing state independent of the page it's showing.
+const DEEP_LINK_PROTOCOL = 'voyd'
+const APP_ORIGIN = 'https://joinvoyd.com'
+
+// Set before createWindow() runs if a voyd:// URL arrived at cold start
+// (Windows argv, or macOS open-url firing before 'ready'); createWindow()
+// consumes it instead of the default /app route.
+let pendingDeepLinkUrl = null
+
+function extractDeepLinkArg(argv) {
+  return argv.find((arg) => typeof arg === 'string' && arg.startsWith(`${DEEP_LINK_PROTOCOL}://`)) || null
+}
+
+// voyd://invite/ABC123 -> https://joinvoyd.com/invite/ABC123. Deliberately a
+// plain path passthrough (protocol host+path -> site path) rather than a
+// hardcoded "invite only" mapping, so this keeps working if more deep-link
+// destinations are added later without touching this function again.
+function resolveDeepLinkTarget(voydUrl) {
+  try {
+    const parsed = new URL(voydUrl)
+    const routePath = `${parsed.hostname}${parsed.pathname}${parsed.search}`.replace(/\/+$/, '')
+    return `${APP_ORIGIN}/${routePath}`
+  } catch (err) {
+    logUpdate(`[deeplink] malformed deep link, ignoring: ${voydUrl} (${err?.message})`)
+    return null
+  }
+}
+
+function handleDeepLink(voydUrl) {
+  const target = resolveDeepLinkTarget(voydUrl)
+  if (!target) return
+  logUpdate(`[deeplink] ${voydUrl} -> ${target} (mainWindow exists: ${!!(mainWindow && !mainWindow.isDestroyed())})`)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    mainWindow.loadURL(target)
+  } else {
+    // Window doesn't exist yet (mid cold-start, before createWindow runs) --
+    // stash it; createWindow() below checks this instead of the default route.
+    pendingDeepLinkUrl = target
+  }
+}
+
+// macOS: fires via the OS's own Launch Services open-url mechanism, which is
+// a completely different path from Windows/Linux argv and can arrive before
+// 'ready' -- registered here, as early as possible, rather than inside
+// whenReady(), specifically so an early fire isn't missed.
+app.on('open-url', (event, url) => {
+  event.preventDefault()
+  if (app.isReady()) {
+    handleDeepLink(url)
+  } else {
+    // Resolve once ready; can't create/show a window before then.
+    app.whenReady().then(() => handleDeepLink(url))
+  }
+})
+
 // The one canonical permanent install location this app's self-replace step
 // always targets — confirmed Aug 17 by locating the real Desktop shortcut's
 // target before it was deleted, and matching the pre-existing hardcoded
@@ -144,7 +207,17 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, commandLine) => {
+    // This used to ignore commandLine entirely -- a voyd:// launch while
+    // already running (Windows/Linux route a second protocol launch through
+    // here, not through open-url, which is macOS-only) would just refocus
+    // the existing window on whatever page it already had open instead of
+    // going to the link's actual target.
+    const deepLinkUrl = extractDeepLinkArg(commandLine)
+    if (deepLinkUrl) {
+      handleDeepLink(deepLinkUrl)
+      return
+    }
     // isDestroyed() check is defense-in-depth on top of the real fix
     // (mainWindow now gets reset to null on 'closed') -- belt and braces
     // against any other path that could still leave a stale reference.
@@ -154,6 +227,42 @@ if (!gotTheLock) {
       mainWindow.focus()
     }
   })
+
+  // Windows cold start: a voyd:// launch arrives as a plain argv entry (no
+  // open-url event on this platform). Checked before createWindow() runs so
+  // pendingDeepLinkUrl is already set when it does. Deliberately inside this
+  // branch, not unconditional -- verified live that a second-instance launch
+  // (the process that just lost the lock race above and is about to quit())
+  // still reaches this point before quit() actually takes effect, and would
+  // otherwise briefly set pendingDeepLinkUrl and run createWindow() in a
+  // process that's already on its way out, racing the real second-instance
+  // handler in the surviving process for no reason.
+  const coldStartUrl = extractDeepLinkArg(process.argv)
+  if (coldStartUrl) {
+    const target = resolveDeepLinkTarget(coldStartUrl)
+    if (target) {
+      pendingDeepLinkUrl = target
+      logUpdate(`[deeplink] cold start argv: ${coldStartUrl} -> ${target}`)
+    }
+  }
+}
+
+// Registers this app as the voyd:// handler at runtime. Needed regardless of
+// the electron-builder "protocols" build config below: the Windows target
+// here is `portable` (a single .exe, no NSIS installer), and electron-builder's
+// protocol registration is normally driven by the installer's own script --
+// a portable build never runs one, so nothing would register the scheme on
+// Windows without this. process.defaultApp is Electron's own flag for "running
+// unpackaged" (e.g. `electron .` in dev) -- the exec path passed in that case
+// needs the two extra args pointing back at this project directory, matching
+// Electron's documented pattern exactly; the packaged/portable exe needs no
+// extra args since process.execPath already points at the real launcher.
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL, process.execPath, [path.resolve(process.argv[1])])
+  }
+} else {
+  app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL)
 }
 
 // Auto updater config
@@ -1290,7 +1399,14 @@ function createWindow() {
   // always throws AbortError there, confirmed via electron/electron#6697).
   setupPushReceiver(mainWindow.webContents)
 
-  mainWindow.loadURL('https://joinvoyd.com/app')
+  // A voyd:// link that arrived before this window existed (cold start, or
+  // macOS open-url firing pre-ready) lands here instead of the generic /app
+  // route -- consumed once, same as the already-running path in
+  // handleDeepLink above.
+  const initialUrl = pendingDeepLinkUrl || 'https://joinvoyd.com/app'
+  if (pendingDeepLinkUrl) logUpdate(`[deeplink] createWindow loading pending deep link: ${initialUrl}`)
+  pendingDeepLinkUrl = null
+  mainWindow.loadURL(initialUrl)
 
   // Real crash fixed here: mainWindow was never reset to null when the
   // window closed (unlike overlayWindow, which already does this), so any
